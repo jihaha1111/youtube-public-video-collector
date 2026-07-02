@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
 
-from .transcripts import _ranked_videos, _video_transcript_item
+from .transcripts import _limit_ranked_videos, _video_transcript_item
 from .url_parser import parse_youtube_url
 
 DOM_TRANSCRIPT_SOURCE = "scrapling_rendered_dom_transcript"
@@ -35,7 +35,7 @@ def fetch_transcript_with_scrapling(
     *,
     preferred_language: str = "ko",
     timeout_ms: int = 90_000,
-    wait_ms: int = 5_000,
+    wait_ms: int = 500,
     headless: bool = True,
     proxy: str | None = None,
 ) -> dict[str, Any]:
@@ -84,7 +84,7 @@ def write_scrapling_transcript_probe(
     *,
     preferred_language: str = "ko",
     timeout_ms: int = 90_000,
-    wait_ms: int = 5_000,
+    wait_ms: int = 500,
     headless: bool = True,
     proxy: str | None = None,
 ) -> Path:
@@ -109,14 +109,14 @@ def enrich_collection_with_scrapling_transcripts(
     preferred_language: str = "ko",
     include_non_shorts: bool = False,
     timeout_ms: int = 90_000,
-    wait_ms: int = 5_000,
+    wait_ms: int = 500,
     headless: bool = True,
     proxy: str | None = None,
     sleep_seconds: float = 0.0,
     stop_on_block: bool = True,
     fetch_one: ScraplingTranscriptFetcher | None = None,
 ) -> dict[str, Any]:
-    videos = _ranked_videos(collection, include_non_shorts=include_non_shorts)[:limit]
+    videos = _limit_ranked_videos(collection, include_non_shorts=include_non_shorts, limit=limit)
     transcript_items = []
     stopped_by_block = False
     for index, video in enumerate(videos):
@@ -185,7 +185,7 @@ def write_scrapling_collection_transcripts(
     preferred_language: str = "ko",
     include_non_shorts: bool = False,
     timeout_ms: int = 90_000,
-    wait_ms: int = 5_000,
+    wait_ms: int = 500,
     headless: bool = True,
     proxy: str | None = None,
     sleep_seconds: float = 0.0,
@@ -288,15 +288,16 @@ def _fetch_watch_page(
     except ImportError as exc:  # pragma: no cover - exercised only without optional dependency installed.
         raise RuntimeError("Install Scrapling support with `python -m pip install -e '.[scrapling]'`.") from exc
 
+    page_action = lambda page: _capture_rendered_dom_transcript(page, timeout_ms=timeout_ms, settle_ms=wait_ms)
     kwargs: dict[str, Any] = {
         "headless": headless,
         "network_idle": True,
         "timeout": timeout_ms,
-        "wait": wait_ms,
+        "wait": 0,
         "block_webrtc": True,
         "locale": "ko-KR" if preferred_language.startswith("ko") else "en-US",
         "timezone_id": "Asia/Seoul" if preferred_language.startswith("ko") else "UTC",
-        "page_action": _capture_rendered_dom_transcript,
+        "page_action": page_action,
         "extra_headers": {"Accept-Language": f"{preferred_language},en;q=0.8"},
     }
     if proxy:
@@ -304,82 +305,155 @@ def _fetch_watch_page(
     return StealthyFetcher.fetch(watch_url, **kwargs)
 
 
-def _capture_rendered_dom_transcript(page: Any) -> None:
-    script = f"""async () => {{
-        const evidence = [];
-        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-        const textOf = (node) => (node && (node.innerText || node.textContent || '') || '').replace(/\\s+/g, ' ').trim();
-        const record = (stage, data = {{}}) => evidence.push(Object.assign({{stage}}, data));
-        const labelOf = (node) => [textOf(node), node?.getAttribute?.('aria-label') || '', node?.getAttribute?.('title') || ''].join(' ').toLowerCase();
-        const clickFirst = async (stage, selectors, keywords = []) => {{
-          for (const selector of selectors) {{
-            const candidates = Array.from(document.querySelectorAll(selector)).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
-            const filtered = keywords.length ? candidates.filter((el) => keywords.some((keyword) => labelOf(el).includes(keyword))) : candidates;
-            record(stage + ':candidates', {{selector, count: candidates.length, matched: filtered.length}});
-            for (const el of filtered) {{
-              try {{ el.scrollIntoView({{block: 'center', inline: 'center'}}); await sleep(150); el.click(); record(stage, {{ok: true, selector, text: textOf(el), label: labelOf(el)}}); return true; }} catch (error) {{ record(stage, {{ok: false, selector, error: String(error)}}); }}
-            }}
-          }}
-          return false;
-        }};
-        await sleep(1000);
-        const bodyText = textOf(document.body).toLowerCase();
-        record('initial_page', {{url: location.href, bodyTextLength: bodyText.length}});
-        const blocked = /captcha|unusual traffic|confirm you're not a bot|robot|429|403/.test(bodyText);
-        const consent = /accept all|reject all|i agree|동의|모두 수락/.test(bodyText);
-        await clickFirst('consent_or_overlay', [
-          'button[aria-label*="Accept" i]', 'button[aria-label*="동의"]', 'button[aria-label*="모두 수락"]',
-          'tp-yt-paper-dialog button', 'ytd-consent-bump-v2-lightbox button', 'button.yt-spec-button-shape-next'
-        ]).catch(() => false);
-        await sleep(500);
-        await clickFirst('description_expand', [
-          'tp-yt-paper-button#expand', '#description-inline-expander #expand', 'ytd-text-inline-expander tp-yt-paper-button',
-          'button[aria-label*="more" i]', 'button[aria-label*="더보기"]'
-        ]).catch(() => false);
-        await sleep(500);
-        const transcriptKeywords = ['transcript', '스크립트', '스크립트 표시'];
-        let opened = await clickFirst('transcript_button_direct', [
-          'button', 'yt-button-view-model button', 'ytd-menu-service-item-renderer', 'tp-yt-paper-item', '[role="menuitem"]'
-        ], transcriptKeywords).catch(() => false);
-        if (!opened) {{
-          await clickFirst('overflow_menu', [
-            'button[aria-label*="more" i]', 'button[aria-label*="추가 작업"]', 'button[aria-label*="더보기"]', 'button[title*="more" i]'
-          ], ['more', '추가 작업', '더보기']).catch(() => false);
-          await sleep(500);
-          opened = await clickFirst('transcript_menu_item', [
-            'ytd-menu-service-item-renderer', 'tp-yt-paper-item', '[role="menuitem"]'
-          ], transcriptKeywords).catch(() => false);
-        }}
-        for (let i = 0; i < 20; i++) {{
-          const modern = document.querySelectorAll('transcript-segment-view-model').length;
-          const legacy = document.querySelectorAll('ytd-transcript-segment-renderer').length;
-          record('wait_segments', {{iteration: i, modern, legacy}});
-          if (modern || legacy) break;
-          await sleep(500);
-        }}
-        const segments = [];
-        for (const node of document.querySelectorAll('transcript-segment-view-model')) {{
-          const start = textOf(node.querySelector('.ytwTranscriptSegmentViewModelTimestamp, [class*="Timestamp"]'));
-          const text = textOf(node.querySelector('.ytAttributedStringHost, [class*="ytAttributedStringHost"]'));
-          if (start || text) segments.push({{start, text}});
-        }}
-        for (const node of document.querySelectorAll('ytd-transcript-segment-renderer')) {{
-          const start = textOf(node.querySelector('.segment-timestamp, [class*="timestamp"]'));
-          const text = textOf(node.querySelector('.segment-text, yt-formatted-string, [class*="segment-text"]'));
-          if (start || text) segments.push({{start, text}});
-        }}
-        const panelCount = document.querySelectorAll('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"], ytd-transcript-renderer, ytd-transcript-search-panel-renderer').length;
-        record('panel_state', {{opened, panelCount}});
-        const payload = {{segments, evidence, blocked, consent, opened, panel_opened: panelCount > 0, url: location.href}};
-        const old = document.getElementById('{DOM_EVIDENCE_SCRIPT_ID}');
-        if (old) old.remove();
-        const node = document.createElement('div');
-        node.id = '{DOM_EVIDENCE_SCRIPT_ID}';
-        node.hidden = true;
-        node.setAttribute('data-gjc-json', 'dom-transcript');
-        node.textContent = JSON.stringify(payload);
-        document.documentElement.appendChild(node);
-    }}"""
+def _capture_rendered_dom_transcript(page: Any, *, timeout_ms: int, settle_ms: int) -> None:
+    action_timeout_ms = max(1_000, timeout_ms - 1_000)
+    poll_interval_ms = max(50, min(250, action_timeout_ms // 300))
+    script = r"""
+async () => {
+    const evidence = [];
+    const actionTimeoutMs = __ACTION_TIMEOUT_MS__;
+    const settleMaxMs = __SETTLE_MAX_MS__;
+    const pollIntervalMs = __POLL_INTERVAL_MS__;
+    const deadline = Date.now() + actionTimeoutMs;
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const textOf = (node) => (node && (node.innerText || node.textContent || '') || '').replace(/\s+/g, ' ').trim();
+    const record = (stage, data = {}) => evidence.push(Object.assign({stage, elapsed_ms: Date.now() - (deadline - actionTimeoutMs)}, data));
+    const labelOf = (node) => [textOf(node), node?.getAttribute?.('aria-label') || '', node?.getAttribute?.('title') || ''].join(' ').toLowerCase();
+    const isVisible = (el) => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
+    const visibleFor = (selectors, keywords = []) => {
+      for (const selector of selectors) {
+        const candidates = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+        const filtered = keywords.length ? candidates.filter((el) => keywords.some((keyword) => labelOf(el).includes(keyword))) : candidates;
+        if (filtered.length) {
+          return {selector, candidates: candidates.length, matched: filtered.length, element: filtered[0]};
+        }
+      }
+      return null;
+    };
+    const clickElement = (stage, match) => {
+      if (!match?.element) return false;
+      try {
+        match.element.scrollIntoView({block: 'center', inline: 'center'});
+        match.element.click();
+        record(stage, {ok: true, selector: match.selector, candidates: match.candidates, matched: match.matched, text: textOf(match.element), label: labelOf(match.element)});
+        return true;
+      } catch (error) {
+        record(stage, {ok: false, selector: match.selector, error: String(error)});
+        return false;
+      }
+    };
+    const countSegments = () => ({
+      modern: document.querySelectorAll('transcript-segment-view-model').length,
+      legacy: document.querySelectorAll('ytd-transcript-segment-renderer').length
+    });
+    const panelCount = () => document.querySelectorAll('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"], ytd-transcript-renderer, ytd-transcript-search-panel-renderer').length;
+    const waitUntil = async (stage, predicate, maxMs) => {
+      const localDeadline = Date.now() + Math.max(0, maxMs);
+      let iterations = 0;
+      while (Date.now() <= localDeadline && Date.now() <= deadline) {
+        const value = predicate();
+        if (value) {
+          record(stage, {ok: true, iterations, value});
+          return value;
+        }
+        iterations += 1;
+        await sleep(pollIntervalMs);
+      }
+      record(stage, {ok: false, iterations, timeout_ms: maxMs});
+      return null;
+    };
+    const transcriptKeywords = ['transcript', '스크립트', '스크립트 표시'];
+    const transcriptSelectors = ['button', 'yt-button-view-model button', 'ytd-menu-service-item-renderer', 'tp-yt-paper-item', '[role="menuitem"]'];
+    const expandSelectors = ['tp-yt-paper-button#expand', '#description-inline-expander #expand', 'ytd-text-inline-expander tp-yt-paper-button', 'button[aria-label*="more" i]', 'button[aria-label*="더보기"]'];
+    const overflowSelectors = ['button[aria-label*="more" i]', 'button[aria-label*="추가 작업"]', 'button[aria-label*="더보기"]', 'button[title*="more" i]'];
+    const consentSelectors = ['button[aria-label*="Accept" i]', 'button[aria-label*="동의"]', 'button[aria-label*="모두 수락"]', 'tp-yt-paper-dialog button', 'ytd-consent-bump-v2-lightbox button', 'button.yt-spec-button-shape-next'];
+
+    await waitUntil('body_ready', () => document.body && textOf(document.body).length > 0, settleMaxMs);
+    const bodyText = textOf(document.body).toLowerCase();
+    const blocked = /captcha|unusual traffic|confirm you're not a bot|robot|429|403/.test(bodyText);
+    const consent = /accept all|reject all|i agree|동의|모두 수락/.test(bodyText);
+    record('initial_page', {url: location.href, bodyTextLength: bodyText.length, blocked, consent, actionTimeoutMs, settleMaxMs, pollIntervalMs});
+
+    const consentMatch = visibleFor(consentSelectors);
+    if (consentMatch) clickElement('consent_or_overlay', consentMatch);
+
+    let opened = false;
+    let expandClicked = false;
+    let overflowClicked = false;
+    let segmentsState = countSegments();
+
+    while (Date.now() <= deadline) {
+      segmentsState = countSegments();
+      if (segmentsState.modern || segmentsState.legacy) {
+        record('segments_ready', segmentsState);
+        break;
+      }
+
+      const transcriptMatch = visibleFor(transcriptSelectors, transcriptKeywords);
+      if (transcriptMatch) {
+        opened = clickElement(opened ? 'transcript_menu_item' : 'transcript_button_direct', transcriptMatch) || opened;
+        await waitUntil('segments_after_click', () => {
+          const counts = countSegments();
+          return (counts.modern || counts.legacy) ? counts : null;
+        }, Math.max(0, deadline - Date.now()));
+        segmentsState = countSegments();
+        break;
+      }
+
+      if (!expandClicked) {
+        const expandMatch = visibleFor(expandSelectors, ['more', '더보기']);
+        if (expandMatch && clickElement('description_expand', expandMatch)) {
+          expandClicked = true;
+          continue;
+        }
+      }
+
+      if (!overflowClicked) {
+        const overflowMatch = visibleFor(overflowSelectors, ['more', '추가 작업', '더보기']);
+        if (overflowMatch && clickElement('overflow_menu', overflowMatch)) {
+          overflowClicked = true;
+          continue;
+        }
+      }
+
+      await sleep(pollIntervalMs);
+    }
+
+    segmentsState = countSegments();
+    if (!segmentsState.modern && !segmentsState.legacy) {
+      record('condition_timeout', {opened, panelCount: panelCount(), modern: segmentsState.modern, legacy: segmentsState.legacy});
+    }
+
+    const segments = [];
+    for (const node of document.querySelectorAll('transcript-segment-view-model')) {
+      const start = textOf(node.querySelector('.ytwTranscriptSegmentViewModelTimestamp, [class*="Timestamp"]'));
+      const text = textOf(node.querySelector('.ytAttributedStringHost, [class*="ytAttributedStringHost"]'));
+      if (start || text) segments.push({start, text});
+    }
+    for (const node of document.querySelectorAll('ytd-transcript-segment-renderer')) {
+      const start = textOf(node.querySelector('.segment-timestamp, [class*="timestamp"]'));
+      const text = textOf(node.querySelector('.segment-text, yt-formatted-string, [class*="segment-text"]'));
+      if (start || text) segments.push({start, text});
+    }
+    const currentPanelCount = panelCount();
+    record('panel_state', {opened, panelCount: currentPanelCount, modern: segmentsState.modern, legacy: segmentsState.legacy});
+    const payload = {segments, evidence, blocked, consent, opened, panel_opened: currentPanelCount > 0, url: location.href};
+    const old = document.getElementById('__DOM_EVIDENCE_SCRIPT_ID__');
+    if (old) old.remove();
+    const node = document.createElement('div');
+    node.id = '__DOM_EVIDENCE_SCRIPT_ID__';
+    node.hidden = true;
+    node.setAttribute('data-gjc-json', 'dom-transcript');
+    node.textContent = JSON.stringify(payload);
+    document.documentElement.appendChild(node);
+}
+"""
+    script = (
+        script.replace("__DOM_EVIDENCE_SCRIPT_ID__", DOM_EVIDENCE_SCRIPT_ID)
+        .replace("__ACTION_TIMEOUT_MS__", str(action_timeout_ms))
+        .replace("__SETTLE_MAX_MS__", str(max(0, settle_ms)))
+        .replace("__POLL_INTERVAL_MS__", str(poll_interval_ms))
+    )
     try:
         page.evaluate(script)
     except Exception as exc:
@@ -391,6 +465,8 @@ def _capture_rendered_dom_transcript(page: Any) -> None:
                     "ok": False,
                     "error": type(exc).__name__,
                     "message": str(exc),
+                    "timeout_ms": timeout_ms,
+                    "settle_ms": settle_ms,
                 }
             ],
             "extractor_error": True,

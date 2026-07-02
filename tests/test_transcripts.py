@@ -67,3 +67,21 @@ def test_enrich_collection_ranks_shorts_by_views() -> None:
     assert enriched["transcript_collection"]["found"] == 2
     assert [item["video_id"] for item in enriched["videos"]] == ["high", "low"]
     assert enriched["videos"][0]["transcript"]["text"] == "script high"
+
+def test_enrich_collection_limit_zero_means_all_ranked_shorts() -> None:
+    collection = {
+        "input": {"video_id": "seed", "collected_at": "2026-01-01T00:00:00Z"},
+        "channel": {"normalized": {"channel_id": "channel", "channel_title": "테스트"}},
+        "channel_videos": [
+            {"normalized": {"video_id": "low", "title": "low", "view_count": 10, "is_probably_short": True}},
+            {"normalized": {"video_id": "long", "title": "long", "view_count": 999, "is_probably_short": False}},
+            {"normalized": {"video_id": "mid", "title": "mid", "view_count": 50, "is_probably_short": True}},
+            {"normalized": {"video_id": "high", "title": "high", "view_count": 100, "is_probably_short": True}},
+        ],
+    }
+
+    enriched = enrich_collection_with_transcripts(collection, limit=0, fetcher=FakeFetcher())
+
+    assert enriched["transcript_collection"]["requested_limit"] == 0
+    assert enriched["transcript_collection"]["attempted"] == 3
+    assert [item["video_id"] for item in enriched["videos"]] == ["high", "mid", "low"]

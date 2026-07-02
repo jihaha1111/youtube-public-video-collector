@@ -125,7 +125,7 @@ def enrich_collection_with_transcripts(
     stop_on_ip_block: bool = False,
 ) -> dict[str, Any]:
     fetcher = fetcher or PublicTranscriptFetcher(preferred_language=preferred_language)
-    videos = _ranked_videos(collection, include_non_shorts=include_non_shorts)[:limit]
+    videos = _limit_ranked_videos(collection, include_non_shorts=include_non_shorts, limit=limit)
     transcript_items = []
     stopped_by_ip_block = False
     for index, video in enumerate(videos):
@@ -317,6 +317,12 @@ def _looks_like_ip_block(transcript: dict[str, Any]) -> bool:
         if isinstance(error, dict)
     ).lower()
     return "blocking requests from your ip" in text or "ip has been blocked" in text or "too many requests" in text
+
+
+def _limit_ranked_videos(collection: dict[str, Any], *, include_non_shorts: bool, limit: int) -> list[dict[str, Any]]:
+    videos = _ranked_videos(collection, include_non_shorts=include_non_shorts)
+    return videos if limit == 0 else videos[:limit]
+
 
 def _ranked_videos(collection: dict[str, Any], *, include_non_shorts: bool) -> list[dict[str, Any]]:
     videos = list(collection.get("channel_videos") or [])

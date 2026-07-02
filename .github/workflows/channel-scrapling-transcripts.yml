@@ -8,7 +8,7 @@ on:
         required: true
         default: https://www.youtube.com/watch?v=Tb6DhFy9N_A
       limit:
-        description: Number of ranked channel videos to transcript-test first
+        description: Number of ranked channel videos to transcript-test first; 0 means all ranked public candidates
         required: true
         default: "5"
       language:
@@ -20,13 +20,13 @@ on:
         required: true
         default: "90000"
       wait_ms:
-        description: Extra wait after page load in milliseconds
+        description: Maximum post-load DOM settle wait before condition-based transcript checks
         required: true
-        default: "5000"
+        default: "500"
       sleep_seconds:
-        description: Delay between Scrapling transcript requests
+        description: Delay between Scrapling transcript requests; 0 disables inter-video waiting
         required: true
-        default: "20"
+        default: "0"
       headless:
         description: Run browser headless
         type: boolean
@@ -41,7 +41,7 @@ on:
 jobs:
   collect-and-transcript:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     permissions:
       contents: read
 

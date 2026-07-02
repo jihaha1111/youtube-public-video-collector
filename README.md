@@ -79,6 +79,8 @@ mock mode는 실제 API 없이도 최종 JSON 구조를 생성합니다. 입력 
 
 Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistItems.list`를 사용합니다. `collect` 명령은 댓글 본문이나 YouTube Studio/Analytics 내부 지표를 수집하지 않습니다.
 
+`--limit 0`은 real API mode에서 업로드 플레이리스트를 페이지 끝까지 따라가며 public 후보 전체를 수집합니다. API quota를 쓰므로 먼저 작은 `--limit`로 샘플을 확인한 뒤 전체 실행에 사용하세요.
+
 ## Public transcript enrichment
 
 `collect`로 만든 단일 collection JSON에서 조회수 상위 Shorts의 공개 자막/자동자막 transcript를 보강할 수 있습니다.
@@ -92,6 +94,48 @@ Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistIte
 ```
 
 이 명령은 `youtube-transcript-api`를 우선 사용하고, watch page의 공개 caption track 파싱을 fallback으로 둡니다. 공개 자막이 없거나 지역/연령/YouTube 응답 변경으로 막힌 영상은 `status: "missing"`과 error reason을 기록합니다. 자동 생성 자막은 인식 오류가 있을 수 있으므로 실제 프롬프트 seed로 쓰기 전 사람이 정리하는 것을 권장합니다.
+
+## Scrapling/Patchright rendered DOM transcript
+
+`youtube-transcript-api`/`timedtext` fallback을 성공으로 보지 않고, YouTube 페이지를 브라우저 렌더링한 뒤 DOM transcript 패널에서 가져온 결과만 `source: "scrapling_rendered_dom_transcript"`로 기록합니다. Transcript 버튼/메뉴와 `transcript-segment-view-model` 또는 `ytd-transcript-segment-renderer` 세그먼트 DOM이 나타나는 조건을 기다리며, `--wait-ms`는 고정 대기가 아니라 초기 DOM settle 조건의 최대 대기값입니다.
+
+샘플 실행:
+
+```bash
+.venv/bin/python -m yt_collector.cli collect \
+  --url "https://www.youtube.com/watch?v=Tb6DhFy9N_A" \
+  --limit 3 \
+  --format json \
+  --out output/Tb6DhFy9N_A_sample_collection.json
+
+.venv/bin/python -m yt_collector.cli scrapling-transcripts \
+  --collection output/Tb6DhFy9N_A_sample_collection.json \
+  --limit 3 \
+  --language ko \
+  --sleep-seconds 0 \
+  --wait-ms 500 \
+  --out output/Tb6DhFy9N_A_sample_dom_transcripts.json
+```
+
+전체 후보 실행은 `--limit 0`을 사용합니다.
+
+```bash
+.venv/bin/python -m yt_collector.cli collect \
+  --url "https://www.youtube.com/watch?v=Tb6DhFy9N_A" \
+  --limit 0 \
+  --format json \
+  --out output/Tb6DhFy9N_A_all_collection.json
+
+.venv/bin/python -m yt_collector.cli scrapling-transcripts \
+  --collection output/Tb6DhFy9N_A_all_collection.json \
+  --limit 0 \
+  --language ko \
+  --sleep-seconds 0 \
+  --wait-ms 500 \
+  --stop-on-block \
+  --out output/Tb6DhFy9N_A_all_dom_transcripts.json
+```
+
 
 ## 입력 URL 형식
 

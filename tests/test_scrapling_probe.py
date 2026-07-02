@@ -222,3 +222,38 @@ def test_enrich_collection_with_scrapling_transcripts_stops_after_block() -> Non
     assert enriched["transcript_collection"]["stopped_by_block"] is True
     assert [item["video_id"] for item in enriched["videos"]] == ["blocked", "skipped", "low"]
     assert enriched["videos"][1]["transcript"]["errors"][0]["code"] == "skipped_after_block"
+
+
+def test_enrich_collection_with_scrapling_transcripts_limit_zero_means_all() -> None:
+    collection = {
+        "input": {"video_id": "seed", "collected_at": "2026-01-01T00:00:00Z"},
+        "channel": {"normalized": {"channel_id": "channel", "channel_title": "테스트"}},
+        "channel_videos": [
+            {"normalized": {"video_id": "low", "title": "low", "view_count": 10, "is_probably_short": True}},
+            {"normalized": {"video_id": "mid", "title": "mid", "view_count": 90, "is_probably_short": True}},
+            {"normalized": {"video_id": "high", "title": "high", "view_count": 100, "is_probably_short": True}},
+        ],
+    }
+
+    def fake_fetch_one(url: str):
+        video_id = url.rsplit("=", 1)[-1]
+        return {
+            "transcript": {
+                "video_id": video_id,
+                "status": "found",
+                "source": DOM_TRANSCRIPT_SOURCE,
+                "language_code": "ko",
+                "segment_count": 1,
+                "text": f"script {video_id}",
+                "segments": [{"start": "0:00", "start_seconds": 0.0, "text": f"script {video_id}"}],
+                "errors": [],
+                "failure_class": None,
+                "stage_evidence": [],
+            }
+        }
+
+    enriched = enrich_collection_with_scrapling_transcripts(collection, limit=0, fetch_one=fake_fetch_one)
+
+    assert enriched["transcript_collection"]["requested_limit"] == 0
+    assert enriched["transcript_collection"]["attempted"] == 3
+    assert [item["video_id"] for item in enriched["videos"]] == ["high", "mid", "low"]

@@ -29,7 +29,7 @@ def collect(
         Path | None,
         typer.Option("--urls-file", exists=True, file_okay=True, dir_okay=False, readable=True, help="Text file with one URL per line."),
     ] = None,
-    limit: Annotated[int, typer.Option("--limit", min=1, help="Real API upload playlist video limit. Mock mode always returns 3.")] = 3,
+    limit: Annotated[int, typer.Option("--limit", min=0, help="Real API upload playlist video limit; 0 means all public upload playlist videos. Mock mode always returns 3.")] = 3,
     output_format: Annotated[str, typer.Option("--format", help="Output format: json or csv.")] = "json",
     out: Annotated[Path, typer.Option("--out", help="Output file path.")] = Path("output/result.json"),
     mock: Annotated[bool, typer.Option("--mock", help="Force mock mode even when YOUTUBE_API_KEY exists.")] = False,
@@ -52,7 +52,8 @@ def collect(
         )
     )
     collector = YouTubeCollector(client, mode=mode)
-    results = [collector.collect(raw_url, limit=limit) for raw_url in urls]
+    effective_limit = None if limit == 0 else limit
+    results = [collector.collect(raw_url, limit=effective_limit) for raw_url in urls]
 
     normalized_format = output_format.strip().lower()
     if normalized_format == "json":
@@ -86,7 +87,7 @@ def transcripts(
             help="Existing JSON collection result from `collect`.",
         ),
     ],
-    limit: Annotated[int, typer.Option("--limit", min=1, help="Top ranked channel videos to enrich.")] = 20,
+    limit: Annotated[int, typer.Option("--limit", min=0, help="Top ranked channel videos to enrich; 0 means all ranked videos.")] = 20,
     out: Annotated[Path, typer.Option("--out", help="Output transcript-enriched JSON path.")] = Path("output/transcripts.json"),
     language: Annotated[str, typer.Option("--language", help="Preferred caption language code.")] = "ko",
     existing: Annotated[
@@ -119,7 +120,7 @@ def scrapling_transcript(
     out: Annotated[Path, typer.Option("--out", help="Output Scrapling transcript probe JSON path.")] = Path("output/scrapling_transcript_probe.json"),
     language: Annotated[str, typer.Option("--language", help="Preferred rendered transcript language code.")] = "ko",
     timeout_ms: Annotated[int, typer.Option("--timeout-ms", min=10_000, help="Scrapling browser timeout in milliseconds.")] = 90_000,
-    wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Extra wait after page load in milliseconds.")] = 5_000,
+    wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Maximum post-load DOM settle wait before condition-based transcript checks.")] = 500,
     headless: Annotated[bool, typer.Option("--headless/--headed", help="Run Scrapling browser in headless mode.")] = True,
     proxy: Annotated[str | None, typer.Option("--proxy", help="Optional proxy URL; defaults to SCRAPLING_PROXY_URL when set.")] = None,
 ) -> None:
@@ -149,11 +150,11 @@ def scrapling_transcripts(
             help="Existing JSON collection result from `collect`.",
         ),
     ],
-    limit: Annotated[int, typer.Option("--limit", min=1, help="Top ranked channel videos to enrich through Scrapling.")] = 20,
+    limit: Annotated[int, typer.Option("--limit", min=0, help="Top ranked channel videos to enrich through Scrapling; 0 means all ranked videos.")] = 20,
     out: Annotated[Path, typer.Option("--out", help="Output Scrapling transcript-enriched JSON path.")] = Path("output/scrapling_transcripts.json"),
     language: Annotated[str, typer.Option("--language", help="Preferred rendered transcript language code.")] = "ko",
     timeout_ms: Annotated[int, typer.Option("--timeout-ms", min=10_000, help="Scrapling browser timeout in milliseconds.")] = 90_000,
-    wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Extra wait after page load in milliseconds.")] = 5_000,
+    wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Maximum post-load DOM settle wait before condition-based transcript checks.")] = 500,
     sleep_seconds: Annotated[float, typer.Option("--sleep-seconds", min=0.0, help="Delay between Scrapling transcript requests.")] = 0.0,
     stop_on_block: Annotated[bool, typer.Option("--stop-on-block/--keep-going", help="Stop after the first block-looking Scrapling response.")] = True,
     headless: Annotated[bool, typer.Option("--headless/--headed", help="Run Scrapling browser in headless mode.")] = True,
@@ -178,6 +179,7 @@ def scrapling_transcripts(
         stop_on_block=stop_on_block,
     )
     typer.echo(f"Wrote Scrapling transcript enrichment to {output_path}.")
+
 def _load_urls(*, url: str | None, urls_file: Path | None) -> list[str]:
     urls: list[str] = []
     if url:
