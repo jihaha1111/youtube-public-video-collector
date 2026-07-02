@@ -12,7 +12,7 @@ on:
         required: true
         default: "5"
       language:
-        description: Preferred caption language code
+        description: Preferred rendered transcript language code
         required: true
         default: ko
       timeout_ms:
@@ -63,6 +63,50 @@ jobs:
       - name: Install Chromium for Scrapling/Patchright
         run: python -m patchright install --with-deps chromium
 
+      - name: Probe single-video rendered DOM transcript hard gate
+        env:
+          SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
+        run: |
+          mkdir -p output
+          HEADLESS_FLAG="--headless"
+          if [ "${{ inputs.headless }}" != "true" ]; then
+            HEADLESS_FLAG="--headed"
+          fi
+          python -m yt_collector.cli scrapling-transcript \
+            --url "https://www.youtube.com/watch?v=Tb6DhFy9N_A" \
+            --language "${{ inputs.language }}" \
+            --timeout-ms "${{ inputs.timeout_ms }}" \
+            --wait-ms "${{ inputs.wait_ms }}" \
+            $HEADLESS_FLAG \
+            --out output/scrapling_dom_probe.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("output/scrapling_dom_probe.json").read_text(encoding="utf-8"))
+          transcript = payload.get("transcript") or {}
+          source = transcript.get("source")
+          segments = transcript.get("segments") or []
+          forbidden = ("captionTracks", "timedtext", "youtube_transcript_api")
+          if transcript.get("status") != "found":
+              raise SystemExit(f"DOM transcript probe did not find transcript: {transcript!r}")
+          if source != "scrapling_rendered_dom_transcript":
+              raise SystemExit(f"Unexpected transcript source: {source!r}")
+          if len(segments) < 8:
+              raise SystemExit(f"Expected at least 8 DOM segments, got {len(segments)}")
+          source_blob = json.dumps(source, ensure_ascii=False)
+          if any(marker in source_blob for marker in forbidden):
+              raise SystemExit(f"Forbidden non-DOM transcript source marker in {source!r}")
+          PY
+
+      - name: Upload single-video DOM probe artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrapling-dom-probe
+          path: output/scrapling_dom_probe.json
+          if-no-files-found: error
+
       - name: Collect channel metadata inside Actions
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -78,7 +122,7 @@ jobs:
             --format json \
             --out output/channel_collection.json
 
-      - name: Fetch public captions through Scrapling inside Actions
+      - name: Fetch rendered DOM transcripts through Scrapling inside Actions
         env:
           SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
         run: |
@@ -122,4 +166,5 @@ jobs:
           path: |
             output/channel_collection.json
             output/channel_scrapling_transcripts.json
+            output/scrapling_dom_probe.json
           if-no-files-found: error

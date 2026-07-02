@@ -117,13 +117,13 @@ def transcripts(
 def scrapling_transcript(
     url: Annotated[str, typer.Option("--url", help="Single public YouTube watch/shorts/youtu.be URL.")],
     out: Annotated[Path, typer.Option("--out", help="Output Scrapling transcript probe JSON path.")] = Path("output/scrapling_transcript_probe.json"),
-    language: Annotated[str, typer.Option("--language", help="Preferred caption language code.")] = "ko",
+    language: Annotated[str, typer.Option("--language", help="Preferred rendered transcript language code.")] = "ko",
     timeout_ms: Annotated[int, typer.Option("--timeout-ms", min=10_000, help="Scrapling browser timeout in milliseconds.")] = 90_000,
     wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Extra wait after page load in milliseconds.")] = 5_000,
     headless: Annotated[bool, typer.Option("--headless/--headed", help="Run Scrapling browser in headless mode.")] = True,
     proxy: Annotated[str | None, typer.Option("--proxy", help="Optional proxy URL; defaults to SCRAPLING_PROXY_URL when set.")] = None,
 ) -> None:
-    """Probe one public YouTube transcript through Scrapling."""
+    """Probe one public YouTube rendered DOM transcript through Scrapling."""
     output_path = write_scrapling_transcript_probe(
         url,
         out,
@@ -151,7 +151,7 @@ def scrapling_transcripts(
     ],
     limit: Annotated[int, typer.Option("--limit", min=1, help="Top ranked channel videos to enrich through Scrapling.")] = 20,
     out: Annotated[Path, typer.Option("--out", help="Output Scrapling transcript-enriched JSON path.")] = Path("output/scrapling_transcripts.json"),
-    language: Annotated[str, typer.Option("--language", help="Preferred caption language code.")] = "ko",
+    language: Annotated[str, typer.Option("--language", help="Preferred rendered transcript language code.")] = "ko",
     timeout_ms: Annotated[int, typer.Option("--timeout-ms", min=10_000, help="Scrapling browser timeout in milliseconds.")] = 90_000,
     wait_ms: Annotated[int, typer.Option("--wait-ms", min=0, help="Extra wait after page load in milliseconds.")] = 5_000,
     sleep_seconds: Annotated[float, typer.Option("--sleep-seconds", min=0.0, help="Delay between Scrapling transcript requests.")] = 0.0,
@@ -163,7 +163,7 @@ def scrapling_transcripts(
         typer.Option("--include-non-shorts", help="Include non-Shorts videos instead of filtering to is_probably_short."),
     ] = False,
 ) -> None:
-    """Enrich a collection JSON with public captions through Scrapling."""
+    """Enrich a collection JSON with rendered DOM transcripts through Scrapling."""
     output_path = write_scrapling_collection_transcripts(
         collection,
         out,

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from yt_collector import scrapling_probe
-from yt_collector.scrapling_probe import enrich_collection_with_scrapling_transcripts, extract_transcript_from_scrapling_response, proxy_from_env
+from yt_collector.scrapling_probe import (
+    DOM_TRANSCRIPT_SOURCE,
+    enrich_collection_with_scrapling_transcripts,
+    extract_dom_transcript_segments,
+    extract_transcript_from_scrapling_response,
+    parse_transcript_timestamp,
+    proxy_from_env,
+)
 
 
 class FakeResponse:
@@ -10,43 +17,156 @@ class FakeResponse:
         self.captured_xhr = captured_xhr or []
 
 
-def test_extract_transcript_from_scrapling_response_uses_caption_tracks() -> None:
-    html = '''before "captionTracks":[
-      {"baseUrl":"https://www.youtube.com/api/timedtext?v=abc\\u0026lang=ko","languageCode":"ko","name":{"simpleText":"한국어 (자동 생성됨)"},"kind":"asr","vssId":"a.ko"}
-    ],"audioTracks" after'''
-    xml = '''<?xml version="1.0" encoding="utf-8" ?><transcript>
-      <text start="0.0" dur="1.0">코스트코의</text>
-      <text start="1.0" dur="1.2">실수</text>
-    </transcript>'''
+MODERN_DOM = """
+<html><body>
+  <transcript-segment-view-model>
+    <span class="ytwTranscriptSegmentViewModelTimestamp">0:01</span>
+    <span class="ytAttributedStringHost">첫 번째 문장</span>
+  </transcript-segment-view-model>
+  <transcript-segment-view-model>
+    <span class="ytwTranscriptSegmentViewModelTimestamp">1:02</span>
+    <span class="ytAttributedStringHost">두 번째 문장</span>
+  </transcript-segment-view-model>
+</body></html>
+"""
 
-    transcript = extract_transcript_from_scrapling_response(
-        "Tb6DhFy9N_A",
-        FakeResponse(html),
-        preferred_language="ko",
-        caption_xml_fetcher=lambda base_url: xml,
-    )
+LEGACY_DOM = """
+<html><body>
+  <ytd-transcript-segment-renderer>
+    <div class="segment-timestamp">0:03</div>
+    <yt-formatted-string class="segment-text">legacy text</yt-formatted-string>
+  </ytd-transcript-segment-renderer>
+</body></html>
+"""
+
+
+def test_extract_transcript_from_scrapling_response_uses_modern_dom_segments() -> None:
+    transcript = extract_transcript_from_scrapling_response("Tb6DhFy9N_A", FakeResponse(MODERN_DOM), preferred_language="ko")
 
     assert transcript["status"] == "found"
+    assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
     assert transcript["language_code"] == "ko"
-    assert transcript["is_generated"] is True
-    assert transcript["text"] == "코스트코의 실수"
     assert transcript["segment_count"] == 2
+    assert transcript["segments"] == [
+        {"start": "0:01", "start_seconds": 1.0, "text": "첫 번째 문장"},
+        {"start": "1:02", "start_seconds": 62.0, "text": "두 번째 문장"},
+    ]
+    assert transcript["failure_class"] is None
+    assert transcript["stage_evidence"]
 
 
-def test_extract_transcript_from_scrapling_response_checks_captured_xhr() -> None:
-    xhr = FakeResponse('''before "captionTracks":[
-      {"baseUrl":"https://www.youtube.com/api/timedtext?v=abc\\u0026lang=ko","languageCode":"ko","name":{"simpleText":"한국어"},"vssId":".ko"}
-    ],"audioTracks" after''')
-    xml = '<transcript><text start="0.0" dur="1.0">자막</text></transcript>'
-
-    transcript = extract_transcript_from_scrapling_response(
-        "Tb6DhFy9N_A",
-        FakeResponse("no tracks", captured_xhr=[xhr]),
-        caption_xml_fetcher=lambda base_url: xml,
-    )
+def test_extract_transcript_from_scrapling_response_uses_legacy_dom_segments() -> None:
+    transcript = extract_transcript_from_scrapling_response("legacy", FakeResponse(LEGACY_DOM), preferred_language="en")
 
     assert transcript["status"] == "found"
-    assert transcript["text"] == "자막"
+    assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
+    assert transcript["segments"] == [{"start": "0:03", "start_seconds": 3.0, "text": "legacy text"}]
+
+
+def test_parse_transcript_timestamp_handles_seconds_minutes_and_hours() -> None:
+    assert parse_transcript_timestamp("7") == 7.0
+    assert parse_transcript_timestamp("1:02") == 62.0
+    assert parse_transcript_timestamp("1:02:03") == 3723.0
+    assert parse_transcript_timestamp("not a timestamp") is None
+
+
+def test_empty_transcript_container_is_segments_empty() -> None:
+    transcript = extract_transcript_from_scrapling_response("empty", FakeResponse("<div id='transcript'></div>"))
+
+    assert transcript["status"] == "missing"
+    assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
+    assert transcript["failure_class"] == "segments_empty"
+    assert transcript["segments"] == []
+    assert transcript["errors"][0]["code"] == "segments_empty"
+
+
+def test_missing_dom_schema_is_selector_drift() -> None:
+    transcript = extract_transcript_from_scrapling_response("missing", FakeResponse("<html><body>No useful schema</body></html>"))
+
+    assert transcript["status"] == "missing"
+    assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
+    assert transcript["failure_class"] == "selector_drift"
+
+
+def test_caption_tracks_only_input_cannot_produce_found() -> None:
+    html = '''before "captionTracks":[
+      {"baseUrl":"https://www.youtube.com/api/timedtext?v=abc\\u0026lang=ko","languageCode":"ko","name":{"simpleText":"한국어"},"vssId":".ko"}
+    ],"audioTracks" after'''
+
+    transcript = extract_transcript_from_scrapling_response("captions", FakeResponse(html))
+
+    assert transcript["status"] == "missing"
+    assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
+    assert "captionTracks" not in transcript["source"]
+    assert "timedtext" not in transcript["source"]
+
+
+def test_public_transcript_fetcher_fallback_is_not_invoked(monkeypatch) -> None:
+    class FailingPublicTranscriptFetcher:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("PublicTranscriptFetcher must not be used by Scrapling DOM path")
+
+    monkeypatch.setattr(scrapling_probe, "_fetch_watch_page", lambda *args, **kwargs: FakeResponse("no rendered transcript"))
+    monkeypatch.setattr(scrapling_probe, "PublicTranscriptFetcher", FailingPublicTranscriptFetcher, raising=False)
+
+    result = scrapling_probe.fetch_transcript_with_scrapling("https://www.youtube.com/watch?v=Tb6DhFy9N_A")
+
+    assert result["transcript"]["status"] == "missing"
+    assert result["transcript"]["source"] == DOM_TRANSCRIPT_SOURCE
+
+
+def test_dom_payload_script_normalizes_to_schema() -> None:
+    payload = {
+        "segments": [{"start": "0:04", "text": "from browser"}],
+        "evidence": [{"stage": "transcript_button", "ok": True}],
+        "opened": True,
+    }
+    html = f'<script id="gjc-youtube-dom-transcript" type="application/json">{scrapling_probe.json.dumps(payload)}</script>'
+
+    transcript = extract_transcript_from_scrapling_response("payload", FakeResponse(html))
+
+    assert transcript["status"] == "found"
+    assert transcript["segments"][0]["start_seconds"] == 4.0
+    assert transcript["stage_evidence"] == payload["evidence"]
+
+
+def test_dom_payload_classifies_panel_not_opened_after_button_click() -> None:
+    payload = {
+        "segments": [],
+        "evidence": [{"stage": "transcript_button_direct", "ok": True}],
+        "opened": True,
+        "panel_opened": False,
+    }
+    html = f'<div id="gjc-youtube-dom-transcript">{scrapling_probe.json.dumps(payload)}</div>'
+
+    transcript = extract_transcript_from_scrapling_response("panel", FakeResponse(html))
+
+    assert transcript["status"] == "missing"
+    assert transcript["failure_class"] == "panel_not_opened"
+    assert transcript["errors"][0]["code"] == "panel_not_opened"
+
+
+def test_dom_payload_classifies_page_action_exception() -> None:
+    payload = {
+        "segments": [],
+        "evidence": [{"stage": "page_action", "ok": False, "error": "Error"}],
+        "extractor_error": True,
+        "opened": False,
+    }
+    html = f'<div id="gjc-youtube-dom-transcript">{scrapling_probe.json.dumps(payload)}</div>'
+
+    transcript = extract_transcript_from_scrapling_response("error", FakeResponse(html))
+
+    assert transcript["status"] == "missing"
+    assert transcript["failure_class"] == "extractor_error"
+    assert transcript["stage_evidence"] == payload["evidence"]
+
+
+def test_extract_dom_transcript_segments_reports_evidence() -> None:
+    segments, evidence = extract_dom_transcript_segments(MODERN_DOM)
+
+    assert len(segments) == 2
+    assert any(item["selector"] == "transcript-segment-view-model" for item in evidence)
 
 
 def test_proxy_from_env_trims_blank_values(monkeypatch) -> None:
@@ -56,34 +176,6 @@ def test_proxy_from_env_trims_blank_values(monkeypatch) -> None:
     monkeypatch.setenv("SCRAPLING_PROXY_URL", "   ")
     assert proxy_from_env() is None
 
-
-
-def test_fetch_transcript_with_scrapling_falls_back_to_transcript_api(monkeypatch) -> None:
-    class FakePublicTranscriptFetcher:
-        def __init__(self, *, preferred_language: str) -> None:
-            self.preferred_language = preferred_language
-
-        def fetch_video_transcript(self, video_id: str):
-            return {
-                "video_id": video_id,
-                "status": "found",
-                "language_code": self.preferred_language,
-                "track_name": "한국어",
-                "is_generated": True,
-                "segment_count": 1,
-                "text": "대체 자막",
-                "segments": [{"start": 0.0, "duration": 1.0, "text": "대체 자막"}],
-                "errors": [],
-            }
-
-    monkeypatch.setattr(scrapling_probe, "_fetch_watch_page", lambda *args, **kwargs: FakeResponse("no tracks"))
-    monkeypatch.setattr(scrapling_probe, "PublicTranscriptFetcher", FakePublicTranscriptFetcher)
-
-    result = scrapling_probe.fetch_transcript_with_scrapling("https://www.youtube.com/watch?v=Tb6DhFy9N_A")
-
-    assert result["transcript"]["status"] == "found"
-    assert result["transcript"]["text"] == "대체 자막"
-    assert result["transcript"]["source"] == "youtube_transcript_api_after_scrapling_no_caption_tracks"
 
 def test_enrich_collection_with_scrapling_transcripts_stops_after_block() -> None:
     collection = {
@@ -103,20 +195,23 @@ def test_enrich_collection_with_scrapling_transcripts_stops_after_block() -> Non
                 "transcript": {
                     "video_id": video_id,
                     "status": "missing",
-                    "errors": [{"code": "caption_fetch_error", "message": "429 too many requests"}],
+                    "source": DOM_TRANSCRIPT_SOURCE,
+                    "failure_class": "blocked_or_captcha",
+                    "errors": [{"code": "blocked_or_captcha", "message": "captcha challenge"}],
                 }
             }
         return {
             "transcript": {
                 "video_id": video_id,
                 "status": "found",
+                "source": DOM_TRANSCRIPT_SOURCE,
                 "language_code": "ko",
-                "track_name": "한국어",
-                "is_generated": True,
                 "segment_count": 1,
                 "text": f"script {video_id}",
-                "segments": [{"start": 0.0, "duration": 1.0, "text": f"script {video_id}"}],
+                "segments": [{"start": "0:00", "start_seconds": 0.0, "text": f"script {video_id}"}],
                 "errors": [],
+                "failure_class": None,
+                "stage_evidence": [],
             }
         }
 
