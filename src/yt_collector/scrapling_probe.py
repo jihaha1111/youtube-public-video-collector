@@ -252,6 +252,30 @@ def _fetch_watch_page(
         from scrapling.fetchers import StealthyFetcher
     except ImportError as exc:  # pragma: no cover - exercised only without optional dependency installed.
         raise RuntimeError("Install Scrapling support with `python -m pip install -e '.[scrapling]'`.") from exc
+    def capture_player_response(page: Any) -> None:
+        try:
+            page.wait_for_timeout(1_000)
+            payload = page.evaluate(
+                """() => JSON.stringify(
+                    window.ytInitialPlayerResponse
+                    || (window.ytplayer && window.ytplayer.config && window.ytplayer.config.args && window.ytplayer.config.args.raw_player_response)
+                    || {}
+                )"""
+            )
+            if isinstance(payload, str) and payload and payload != "{}":
+                page.evaluate(
+                    """payload => {
+                        const node = document.createElement('script');
+                        node.id = 'gjc-youtube-player-response';
+                        node.type = 'application/json';
+                        node.textContent = payload;
+                        document.documentElement.appendChild(node);
+                    }""",
+                    payload,
+                )
+        except Exception:
+            return
+
 
     kwargs: dict[str, Any] = {
         "headless": headless,
@@ -262,6 +286,7 @@ def _fetch_watch_page(
         "locale": "ko-KR" if preferred_language.startswith("ko") else "en-US",
         "timezone_id": "Asia/Seoul" if preferred_language.startswith("ko") else "UTC",
         "capture_xhr": r"(youtube\.com/api/timedtext|/api/timedtext|/youtubei/v1/player)",
+        "page_action": capture_player_response,
         "extra_headers": {"Accept-Language": f"{preferred_language},en;q=0.8"},
     }
     if proxy:
