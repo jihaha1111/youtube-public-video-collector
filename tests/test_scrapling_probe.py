@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from yt_collector import scrapling_probe
 from yt_collector.scrapling_probe import enrich_collection_with_scrapling_transcripts, extract_transcript_from_scrapling_response, proxy_from_env
 
 
@@ -55,6 +56,34 @@ def test_proxy_from_env_trims_blank_values(monkeypatch) -> None:
     monkeypatch.setenv("SCRAPLING_PROXY_URL", "   ")
     assert proxy_from_env() is None
 
+
+
+def test_fetch_transcript_with_scrapling_falls_back_to_transcript_api(monkeypatch) -> None:
+    class FakePublicTranscriptFetcher:
+        def __init__(self, *, preferred_language: str) -> None:
+            self.preferred_language = preferred_language
+
+        def fetch_video_transcript(self, video_id: str):
+            return {
+                "video_id": video_id,
+                "status": "found",
+                "language_code": self.preferred_language,
+                "track_name": "한국어",
+                "is_generated": True,
+                "segment_count": 1,
+                "text": "대체 자막",
+                "segments": [{"start": 0.0, "duration": 1.0, "text": "대체 자막"}],
+                "errors": [],
+            }
+
+    monkeypatch.setattr(scrapling_probe, "_fetch_watch_page", lambda *args, **kwargs: FakeResponse("no tracks"))
+    monkeypatch.setattr(scrapling_probe, "PublicTranscriptFetcher", FakePublicTranscriptFetcher)
+
+    result = scrapling_probe.fetch_transcript_with_scrapling("https://www.youtube.com/watch?v=Tb6DhFy9N_A")
+
+    assert result["transcript"]["status"] == "found"
+    assert result["transcript"]["text"] == "대체 자막"
+    assert result["transcript"]["source"] == "youtube_transcript_api_after_scrapling_no_caption_tracks"
 
 def test_enrich_collection_with_scrapling_transcripts_stops_after_block() -> None:
     collection = {

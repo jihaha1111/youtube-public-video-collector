@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .transcripts import (
     CaptionTrack,
+    PublicTranscriptFetcher,
     _ranked_videos,
     _video_transcript_item,
     choose_caption_track,
@@ -45,6 +46,16 @@ def fetch_transcript_with_scrapling(
         preferred_language=preferred_language,
         proxy=proxy,
     )
+    if transcript.get("status") != "found" and _has_error_code(transcript, "no_caption_tracks"):
+        fallback = PublicTranscriptFetcher(preferred_language=preferred_language).fetch_video_transcript(parsed_url.video_id)
+        if fallback.get("status") == "found":
+            transcript = {**fallback, "source": "youtube_transcript_api_after_scrapling_no_caption_tracks"}
+        else:
+            transcript = {
+                **fallback,
+                "source": "youtube_transcript_api_after_scrapling_no_caption_tracks",
+                "errors": [*transcript.get("errors", []), *fallback.get("errors", [])],
+            }
     return {
         "input": {
             "url": raw_url,
@@ -337,6 +348,13 @@ def _response_text(response: Any) -> str:
     if isinstance(body, str):
         return body
     return str(response)
+
+
+def _has_error_code(transcript: dict[str, Any], code: str) -> bool:
+    errors = transcript.get("errors")
+    return isinstance(errors, list) and any(isinstance(error, dict) and error.get("code") == code for error in errors)
+
+
 def _looks_like_block(transcript: dict[str, Any]) -> bool:
     if transcript.get("status") == "found":
         return False
