@@ -1,0 +1,10 @@
+.DS_Store
+.gjc/
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+.env
+output/*
+!output/.gitkeep
