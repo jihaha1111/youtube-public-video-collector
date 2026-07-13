@@ -149,6 +149,14 @@ Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistIte
 
 `input_video_targets.txt`는 한 줄에 watch/Shorts/youtu.be URL 또는 11자리 video ID 하나를 넣습니다. GitHub Actions의 `Video list Scrapling transcripts` 워크플로도 같은 형식을 받으며, 실행 revision·run ID·입력 체크섬을 artifact manifest에 함께 기록합니다. 이 경로는 YouTube Data API channel 수집을 다시 실행하지 않습니다.
 
+렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
+
+```bash
+.venv/bin/python scripts/fetch_public_transcript.py VIDEO_ID \
+  --language ko \
+  --out output/VIDEO_ID_public_transcript.json
+```
+
 
 ## 입력 URL 형식
 
