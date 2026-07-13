@@ -1,0 +1,223 @@
+name: Video list Scrapling transcripts
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: One public YouTube URL or 11-character video ID per line
+        required: true
+        type: string
+      limit:
+        description: Input-order target limit; 0 means all unique targets
+        required: true
+        default: "5"
+      language:
+        description: Preferred rendered transcript language code
+        required: true
+        default: ko
+      timeout_ms:
+        description: Scrapling browser timeout in milliseconds
+        required: true
+        default: "90000"
+      wait_ms:
+        description: Maximum post-load DOM settle wait before transcript checks
+        required: true
+        default: "500"
+      sleep_seconds:
+        description: Delay between transcript requests
+        required: true
+        default: "0"
+      headless:
+        description: Run browser headless
+        type: boolean
+        required: true
+        default: true
+      stop_on_block:
+        description: Skip remaining targets after the first block-looking response
+        type: boolean
+        required: true
+        default: true
+
+jobs:
+  collect-transcripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project with Scrapling support
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[scrapling]"
+
+      - name: Install Chromium for Scrapling/Patchright
+        run: python -m patchright install --with-deps chromium
+
+      - name: Materialize explicit target list
+        env:
+          VIDEO_TARGETS: ${{ inputs.targets }}
+        run: |
+          mkdir -p output
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          lines = [
+              line.strip()
+              for line in os.environ["VIDEO_TARGETS"].splitlines()
+              if line.strip() and not line.strip().startswith("#")
+          ]
+          if not lines:
+              raise SystemExit("targets input must contain at least one URL or video ID")
+          Path("output/video_targets.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"targets={len(lines)}")
+          PY
+
+      - name: Record run manifest
+        env:
+          INPUT_LIMIT: ${{ inputs.limit }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          INPUT_TIMEOUT_MS: ${{ inputs.timeout_ms }}
+          INPUT_WAIT_MS: ${{ inputs.wait_ms }}
+          INPUT_SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
+          INPUT_HEADLESS: ${{ inputs.headless }}
+          INPUT_STOP_ON_BLOCK: ${{ inputs.stop_on_block }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          target_bytes = Path("output/video_targets.txt").read_bytes()
+          manifest = {
+              "schema_version": 1,
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "git_revision": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "targets_sha256": hashlib.sha256(target_bytes).hexdigest(),
+              "settings": {
+                  "limit": int(os.environ["INPUT_LIMIT"]),
+                  "language": os.environ["INPUT_LANGUAGE"],
+                  "timeout_ms": int(os.environ["INPUT_TIMEOUT_MS"]),
+                  "wait_ms": int(os.environ["INPUT_WAIT_MS"]),
+                  "sleep_seconds": float(os.environ["INPUT_SLEEP_SECONDS"]),
+                  "headless": os.environ["INPUT_HEADLESS"] == "true",
+                  "stop_on_block": os.environ["INPUT_STOP_ON_BLOCK"] == "true",
+              },
+          }
+          Path("output/run_manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Probe single-video rendered DOM transcript hard gate
+        env:
+          SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
+        run: |
+          HEADLESS_FLAG="--headless"
+          if [ "${{ inputs.headless }}" != "true" ]; then
+            HEADLESS_FLAG="--headed"
+          fi
+          python -m yt_collector.cli scrapling-transcript \
+            --url "https://www.youtube.com/watch?v=Tb6DhFy9N_A" \
+            --language "${{ inputs.language }}" \
+            --timeout-ms "${{ inputs.timeout_ms }}" \
+            --wait-ms "${{ inputs.wait_ms }}" \
+            $HEADLESS_FLAG \
+            --out output/scrapling_dom_probe.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("output/scrapling_dom_probe.json").read_text(encoding="utf-8"))
+          transcript = payload.get("transcript") or {}
+          if transcript.get("status") != "found":
+              raise SystemExit(f"DOM transcript probe failed: {transcript!r}")
+          if transcript.get("source") != "scrapling_rendered_dom_transcript":
+              raise SystemExit(f"Unexpected transcript source: {transcript.get('source')!r}")
+          if len(transcript.get("segments") or []) < 8:
+              raise SystemExit("DOM transcript probe returned fewer than 8 segments")
+          PY
+
+      - name: Fetch explicit-list rendered DOM transcripts
+        env:
+          SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
+        run: |
+          HEADLESS_FLAG="--headless"
+          if [ "${{ inputs.headless }}" != "true" ]; then
+            HEADLESS_FLAG="--headed"
+          fi
+          BLOCK_FLAG="--stop-on-block"
+          if [ "${{ inputs.stop_on_block }}" != "true" ]; then
+            BLOCK_FLAG="--keep-going"
+          fi
+          python -m yt_collector.cli scrapling-transcript-list \
+            --targets-file output/video_targets.txt \
+            --limit "${{ inputs.limit }}" \
+            --language "${{ inputs.language }}" \
+            --timeout-ms "${{ inputs.timeout_ms }}" \
+            --wait-ms "${{ inputs.wait_ms }}" \
+            --sleep-seconds "${{ inputs.sleep_seconds }}" \
+            $HEADLESS_FLAG \
+            $BLOCK_FLAG \
+            --out output/video_list_scrapling_transcripts.json
+
+      - name: Validate and summarize result
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(
+              Path("output/video_list_scrapling_transcripts.json").read_text(encoding="utf-8")
+          )
+          summary = payload.get("transcript_collection") or {}
+          videos = payload.get("videos") or []
+          if summary.get("source") != "scrapling_rendered_dom_transcript":
+              raise SystemExit(f"Unexpected collection source: {summary.get('source')!r}")
+          if summary.get("attempted") != len(videos):
+              raise SystemExit("Attempted count does not match output video count")
+          for item in videos:
+              transcript = item.get("transcript") or {}
+              if transcript.get("source") != "scrapling_rendered_dom_transcript":
+                  raise SystemExit(f"Unexpected item source: {item.get('video_id')}")
+          lines = [
+              f"attempted={summary.get('attempted')}",
+              f"found={summary.get('found')}",
+              f"missing={summary.get('missing')}",
+              f"stopped_by_block={summary.get('stopped_by_block')}",
+              f"failure_counts={summary.get('failure_counts')}",
+          ]
+          print("\n".join(lines))
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write("## Explicit-list DOM transcript result\n\n")
+              handle.write("```text\n" + "\n".join(lines) + "\n```\n")
+          PY
+
+      - name: Upload explicit-list transcript artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-list-scrapling-transcripts
+          path: |
+            output/video_targets.txt
+            output/run_manifest.json
+            output/scrapling_dom_probe.json
+            output/video_list_scrapling_transcripts.json
+          if-no-files-found: warn

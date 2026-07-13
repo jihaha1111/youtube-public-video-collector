@@ -216,6 +216,175 @@ def write_scrapling_collection_transcripts(
     return output
 
 
+def collect_target_list_with_scrapling_transcripts(
+    raw_targets: list[str],
+    *,
+    limit: int = 0,
+    preferred_language: str = "ko",
+    timeout_ms: int = 90_000,
+    wait_ms: int = 500,
+    headless: bool = True,
+    proxy: str | None = None,
+    sleep_seconds: float = 0.0,
+    stop_on_block: bool = True,
+    fetch_one: ScraplingTranscriptFetcher | None = None,
+) -> dict[str, Any]:
+    """Fetch rendered DOM transcripts for an explicit ordered URL/video-ID list."""
+    if limit < 0:
+        raise ValueError("limit must be 0 or greater")
+
+    targets: list[dict[str, str]] = []
+    seen_video_ids: set[str] = set()
+    for raw_target in raw_targets:
+        target = raw_target.strip()
+        if not target or target.startswith("#"):
+            continue
+        raw_url = (
+            f"https://www.youtube.com/watch?v={target}"
+            if re.fullmatch(r"[A-Za-z0-9_-]{11}", target)
+            else target
+        )
+        parsed = parse_youtube_url(raw_url)
+        if parsed.video_id in seen_video_ids:
+            continue
+        seen_video_ids.add(parsed.video_id)
+        targets.append(
+            {
+                "raw_target": target,
+                "video_id": parsed.video_id,
+                "canonical_watch_url": parsed.canonical_watch_url,
+                "canonical_shorts_url": parsed.canonical_shorts_url,
+            }
+        )
+
+    if not targets:
+        raise ValueError("target list must contain at least one YouTube URL or video ID")
+    selected_targets = targets if limit == 0 else targets[:limit]
+
+    transcript_items: list[dict[str, Any]] = []
+    stopped_by_block = False
+    for index, target in enumerate(selected_targets):
+        video_id = target["video_id"]
+        if stopped_by_block:
+            transcript = _missing(
+                video_id,
+                "blocked_or_captcha",
+                "Skipped because an earlier Scrapling transcript request looked blocked.",
+            )
+            transcript["errors"][0]["code"] = "skipped_after_block"
+        else:
+            result = (
+                fetch_one(target["canonical_watch_url"])
+                if fetch_one
+                else fetch_transcript_with_scrapling(
+                    target["canonical_watch_url"],
+                    preferred_language=preferred_language,
+                    timeout_ms=timeout_ms,
+                    wait_ms=wait_ms,
+                    headless=headless,
+                    proxy=proxy,
+                )
+            )
+            transcript = result.get("transcript") if isinstance(result, dict) else None
+            if not isinstance(transcript, dict):
+                transcript = _missing(
+                    video_id,
+                    "extractor_error",
+                    "Scrapling fetcher returned an invalid result payload.",
+                )
+            if stop_on_block and _looks_like_block(transcript):
+                stopped_by_block = True
+
+        transcript_items.append(
+            {
+                "raw_target": target["raw_target"],
+                **_video_transcript_item(
+                    {
+                        "video_id": video_id,
+                        "canonical_watch_url": target["canonical_watch_url"],
+                        "canonical_shorts_url": target["canonical_shorts_url"],
+                    },
+                    transcript,
+                ),
+            }
+        )
+        if sleep_seconds > 0 and index < len(selected_targets) - 1 and not stopped_by_block:
+            time.sleep(sleep_seconds)
+
+    found_count = sum(
+        1 for item in transcript_items if item["transcript"].get("status") == "found"
+    )
+    failure_counts: dict[str, int] = {}
+    for item in transcript_items:
+        transcript = item["transcript"]
+        if transcript.get("status") == "found":
+            continue
+        failure_class = transcript.get("failure_class") or "unknown"
+        failure_counts[failure_class] = failure_counts.get(failure_class, 0) + 1
+
+    return {
+        "source_target_list": {
+            "requested_nonblank_targets": len(
+                [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
+            ),
+            "unique_video_ids": len(targets),
+            "selected_video_ids": [target["video_id"] for target in selected_targets],
+            "duplicates_removed": len(
+                [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
+            )
+            - len(targets),
+        },
+        "transcript_collection": {
+            "preferred_language": preferred_language,
+            "requested_limit": limit,
+            "attempted": len(transcript_items),
+            "found": found_count,
+            "missing": len(transcript_items) - found_count,
+            "failure_counts": dict(sorted(failure_counts.items())),
+            "fetcher": "scrapling.StealthyFetcher",
+            "source": DOM_TRANSCRIPT_SOURCE,
+            "timeout_ms": timeout_ms,
+            "wait_ms": wait_ms,
+            "headless": headless,
+            "used_proxy": bool(proxy),
+            "sleep_seconds": sleep_seconds,
+            "stopped_by_block": stopped_by_block,
+        },
+        "videos": transcript_items,
+    }
+
+
+def write_scrapling_target_list_transcripts(
+    targets_path: str | Path,
+    out_path: str | Path,
+    *,
+    limit: int = 0,
+    preferred_language: str = "ko",
+    timeout_ms: int = 90_000,
+    wait_ms: int = 500,
+    headless: bool = True,
+    proxy: str | None = None,
+    sleep_seconds: float = 0.0,
+    stop_on_block: bool = True,
+) -> Path:
+    targets = Path(targets_path).read_text(encoding="utf-8").splitlines()
+    result = collect_target_list_with_scrapling_transcripts(
+        targets,
+        limit=limit,
+        preferred_language=preferred_language,
+        timeout_ms=timeout_ms,
+        wait_ms=wait_ms,
+        headless=headless,
+        proxy=proxy,
+        sleep_seconds=sleep_seconds,
+        stop_on_block=stop_on_block,
+    )
+    output = Path(out_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
 def extract_transcript_from_scrapling_response(
     video_id: str,
     response: Any,

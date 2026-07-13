@@ -12,7 +12,12 @@ from .exporters import export_csv, export_json
 from .mock_client import MockYouTubeClient
 from .youtube_client import YouTubeDataApiClient
 from .transcripts import enrich_collection_file
-from .scrapling_probe import proxy_from_env, write_scrapling_collection_transcripts, write_scrapling_transcript_probe
+from .scrapling_probe import (
+    proxy_from_env,
+    write_scrapling_collection_transcripts,
+    write_scrapling_target_list_transcripts,
+    write_scrapling_transcript_probe,
+)
 
 app = typer.Typer(no_args_is_help=True, help="Collect public YouTube video/channel metadata into JSON or CSV.")
 @app.command()
@@ -179,6 +184,76 @@ def scrapling_transcripts(
         stop_on_block=stop_on_block,
     )
     typer.echo(f"Wrote Scrapling transcript enrichment to {output_path}.")
+
+
+@app.command()
+def scrapling_transcript_list(
+    targets_file: Annotated[
+        Path,
+        typer.Option(
+            "--targets-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Text file with one public YouTube URL or 11-character video ID per line.",
+        ),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=0, help="Input-order target limit; 0 means all unique targets."),
+    ] = 0,
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output explicit-list Scrapling transcript JSON path."),
+    ] = Path("output/scrapling_target_transcripts.json"),
+    language: Annotated[
+        str,
+        typer.Option("--language", help="Preferred rendered transcript language code."),
+    ] = "ko",
+    timeout_ms: Annotated[
+        int,
+        typer.Option("--timeout-ms", min=10_000, help="Scrapling browser timeout in milliseconds."),
+    ] = 90_000,
+    wait_ms: Annotated[
+        int,
+        typer.Option(
+            "--wait-ms",
+            min=0,
+            help="Maximum post-load DOM settle wait before condition-based transcript checks.",
+        ),
+    ] = 500,
+    sleep_seconds: Annotated[
+        float,
+        typer.Option("--sleep-seconds", min=0.0, help="Delay between Scrapling transcript requests."),
+    ] = 0.0,
+    stop_on_block: Annotated[
+        bool,
+        typer.Option("--stop-on-block/--keep-going", help="Stop after the first block-looking response."),
+    ] = True,
+    headless: Annotated[
+        bool,
+        typer.Option("--headless/--headed", help="Run Scrapling browser in headless mode."),
+    ] = True,
+    proxy: Annotated[
+        str | None,
+        typer.Option("--proxy", help="Optional proxy URL; defaults to SCRAPLING_PROXY_URL when set."),
+    ] = None,
+) -> None:
+    """Fetch rendered DOM transcripts for an explicit ordered target list."""
+    output_path = write_scrapling_target_list_transcripts(
+        targets_file,
+        out,
+        limit=limit,
+        preferred_language=language,
+        timeout_ms=timeout_ms,
+        wait_ms=wait_ms,
+        headless=headless,
+        proxy=proxy or proxy_from_env(),
+        sleep_seconds=sleep_seconds,
+        stop_on_block=stop_on_block,
+    )
+    typer.echo(f"Wrote explicit-list Scrapling transcripts to {output_path}.")
 
 def _load_urls(*, url: str | None, urls_file: Path | None) -> list[str]:
     urls: list[str] = []

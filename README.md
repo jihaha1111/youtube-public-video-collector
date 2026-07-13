@@ -136,6 +136,19 @@ Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistIte
   --out output/Tb6DhFy9N_A_all_dom_transcripts.json
 ```
 
+채널 순위가 아니라 이미 선별한 영상 URL/ID 목록만 입력하려면 다음 명령을 사용합니다. 입력 순서를 유지하고 중복 video ID는 처음 한 번만 처리합니다.
+
+```bash
+.venv/bin/python -m yt_collector.cli scrapling-transcript-list \
+  --targets-file input_video_targets.txt \
+  --limit 0 \
+  --language ko \
+  --stop-on-block \
+  --out output/video_list_scrapling_transcripts.json
+```
+
+`input_video_targets.txt`는 한 줄에 watch/Shorts/youtu.be URL 또는 11자리 video ID 하나를 넣습니다. GitHub Actions의 `Video list Scrapling transcripts` 워크플로도 같은 형식을 받으며, 실행 revision·run ID·입력 체크섬을 artifact manifest에 함께 기록합니다. 이 경로는 YouTube Data API channel 수집을 다시 실행하지 않습니다.
+
 
 ## 입력 URL 형식
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from yt_collector import scrapling_probe
 from yt_collector.scrapling_probe import (
     DOM_TRANSCRIPT_SOURCE,
+    collect_target_list_with_scrapling_transcripts,
     enrich_collection_with_scrapling_transcripts,
     extract_dom_transcript_segments,
     extract_transcript_from_scrapling_response,
@@ -257,3 +258,83 @@ def test_enrich_collection_with_scrapling_transcripts_limit_zero_means_all() -> 
     assert enriched["transcript_collection"]["requested_limit"] == 0
     assert enriched["transcript_collection"]["attempted"] == 3
     assert [item["video_id"] for item in enriched["videos"]] == ["high", "mid", "low"]
+
+
+def test_collect_target_list_preserves_order_deduplicates_and_accepts_video_ids() -> None:
+    requested_urls: list[str] = []
+
+    def fake_fetch_one(url: str):
+        requested_urls.append(url)
+        video_id = url.rsplit("=", 1)[-1]
+        return {
+            "transcript": {
+                "video_id": video_id,
+                "status": "found",
+                "source": DOM_TRANSCRIPT_SOURCE,
+                "language_code": "ko",
+                "segment_count": 1,
+                "text": f"script {video_id}",
+                "segments": [
+                    {"start": "0:00", "start_seconds": 0.0, "text": f"script {video_id}"}
+                ],
+                "errors": [],
+                "failure_class": None,
+                "stage_evidence": [],
+            }
+        }
+
+    result = collect_target_list_with_scrapling_transcripts(
+        [
+            "# keep input order",
+            "Tb6DhFy9N_A",
+            "https://www.youtube.com/shorts/rGFXQlS9Cp4",
+            "https://youtu.be/Tb6DhFy9N_A",
+            "",
+        ],
+        limit=0,
+        fetch_one=fake_fetch_one,
+    )
+
+    assert result["source_target_list"] == {
+        "requested_nonblank_targets": 3,
+        "unique_video_ids": 2,
+        "selected_video_ids": ["Tb6DhFy9N_A", "rGFXQlS9Cp4"],
+        "duplicates_removed": 1,
+    }
+    assert result["transcript_collection"]["attempted"] == 2
+    assert result["transcript_collection"]["found"] == 2
+    assert requested_urls == [
+        "https://www.youtube.com/watch?v=Tb6DhFy9N_A",
+        "https://www.youtube.com/watch?v=rGFXQlS9Cp4",
+    ]
+
+
+def test_collect_target_list_limit_and_stop_on_block() -> None:
+    def fake_fetch_one(url: str):
+        video_id = url.rsplit("=", 1)[-1]
+        if video_id == "Tb6DhFy9N_A":
+            return {
+                "transcript": {
+                    "video_id": video_id,
+                    "status": "missing",
+                    "source": DOM_TRANSCRIPT_SOURCE,
+                    "failure_class": "blocked_or_captcha",
+                    "errors": [{"code": "blocked_or_captcha", "message": "blocked"}],
+                }
+            }
+        raise AssertionError("Later targets must be skipped after a block")
+
+    result = collect_target_list_with_scrapling_transcripts(
+        ["Tb6DhFy9N_A", "rGFXQlS9Cp4", "PFvCfu1ECK4"],
+        limit=2,
+        fetch_one=fake_fetch_one,
+    )
+
+    assert result["source_target_list"]["selected_video_ids"] == [
+        "Tb6DhFy9N_A",
+        "rGFXQlS9Cp4",
+    ]
+    assert result["transcript_collection"]["attempted"] == 2
+    assert result["transcript_collection"]["found"] == 0
+    assert result["transcript_collection"]["stopped_by_block"] is True
+    assert result["videos"][1]["transcript"]["errors"][0]["code"] == "skipped_after_block"
