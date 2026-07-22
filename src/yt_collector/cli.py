@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import json
+
 import typer
 
 from . import __version__
 from .collector import YouTubeCollector
+from .channel_seed_resolver import resolve_channel_seeds as resolve_channel_seed_inputs
 from .config import load_settings
 from .exporters import export_csv, export_json
 from .mock_client import MockYouTubeClient
@@ -76,6 +79,71 @@ def collect(
     if error_count:
         typer.echo(f"Completed with errors in {error_count} result(s); see output file for details.", err=True)
     if error_count == len(results):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def resolve_channel_seeds(
+    channels_file: Annotated[
+        Path,
+        typer.Option(
+            "--channels-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Text file with one public YouTube /channel/UC... or /@handle URL per line.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Resolved channel identity and seed-video JSON path."),
+    ] = Path("output/resolved_channel_seeds.json"),
+    seeds_out: Annotated[
+        Path,
+        typer.Option("--seeds-out", help="Output text file with one resolved public seed-video URL per line."),
+    ] = Path("output/channel_seed_urls.txt"),
+    env_file: Annotated[
+        Path,
+        typer.Option("--env-file", help="Path to .env file for YOUTUBE_API_KEY."),
+    ] = Path(".env"),
+) -> None:
+    """Resolve public channel URLs to official channel IDs and recent public seed videos."""
+    channel_urls = [
+        line.strip()
+        for line in channels_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not channel_urls:
+        raise typer.BadParameter("--channels-file must contain at least one channel URL.")
+
+    settings = load_settings(env_file)
+    if not settings.youtube_api_key:
+        typer.echo("YOUTUBE_API_KEY is required to resolve channel URLs.", err=True)
+        raise typer.Exit(code=1)
+
+    client = YouTubeDataApiClient(
+        settings.youtube_api_key,
+        base_url=settings.api_base_url,
+        timeout=settings.timeout_seconds,
+    )
+    payload = resolve_channel_seed_inputs(channel_urls, client)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    seed_urls = [
+        item["seed_video"]["canonical_watch_url"]
+        for item in payload["channels"]
+        if item.get("status") == "resolved" and item.get("seed_video")
+    ]
+    seeds_out.parent.mkdir(parents=True, exist_ok=True)
+    seeds_out.write_text("\n".join(seed_urls) + ("\n" if seed_urls else ""), encoding="utf-8")
+
+    typer.echo(
+        f"Resolved {payload['resolved_count']}/{payload['input_count']} channel(s); "
+        f"wrote {out} and {seeds_out}."
+    )
+    if payload["error_count"]:
         raise typer.Exit(code=1)
 
 

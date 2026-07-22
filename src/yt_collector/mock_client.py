@@ -40,6 +40,12 @@ class MockYouTubeClient:
             return []
         return [self._channel_item()]
 
+    def list_channels_by_handle(self, handle: str) -> list[dict[str, Any]]:
+        if self.source_video_id is None:
+            seed = _derived_id(handle or "mock-handle", "seed")
+            self.set_source_video_id(seed)
+        return [self._channel_item()]
+
     def list_playlist_items(self, playlist_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         if self.source_video_id is None:
             self.set_source_video_id("mockVideo01")

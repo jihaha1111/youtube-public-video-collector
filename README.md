@@ -81,6 +81,49 @@ Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistIte
 
 `--limit 0`은 real API mode에서 업로드 플레이리스트를 페이지 끝까지 따라가며 public 후보 전체를 수집합니다. API quota를 쓰므로 먼저 작은 `--limit`로 샘플을 확인한 뒤 전체 실행에 사용하세요.
 
+## 채널 URL을 메타데이터 seed로 변환
+
+`collect`는 기존 호환성을 위해 대표 영상 URL을 입력으로 사용합니다. 채널 ID URL이나 `@handle` URL만 알고 있을 때는 먼저 공식 YouTube Data API로 채널 ID와 최근 공개 seed 영상을 확정합니다.
+
+입력 파일 예시:
+
+```text
+https://www.youtube.com/channel/UC4Qd6YqA1slSltXRavnNtYw
+https://www.youtube.com/@cookietime-l5w/shorts
+https://www.youtube.com/@맛보라1/shorts
+```
+
+실행:
+
+```bash
+.venv/bin/python -m yt_collector.cli resolve-channel-seeds \
+  --channels-file channel_urls.txt \
+  --out output/resolved_channel_seeds.json \
+  --seeds-out output/channel_seed_urls.txt
+
+.venv/bin/python -m yt_collector.cli collect \
+  --urls-file output/channel_seed_urls.txt \
+  --limit 0 \
+  --format json \
+  --out output/channel_metadata_collection.json
+```
+
+`resolve-channel-seeds`는 `/channel/UC...`, `/@handle`, `/@handle/shorts`만 지원합니다. legacy `/c/...` custom URL을 추측해서 공식 channel ID로 바꾸지 않습니다. 입력 중 하나라도 해석하거나 공개 seed 영상으로 확인하지 못하면 상태와 오류를 JSON에 기록한 뒤 실패합니다.
+
+## GitHub Actions 메타데이터 전용 스냅샷
+
+`Channel metadata snapshot` 워크플로는 자막 브라우저나 Scrapling을 설치하지 않고 다음 단계만 실행합니다.
+
+1. 여러 채널 URL 입력 보존
+2. 공식 channel ID와 최근 공개 seed 영상 확인
+3. 채널별 공개 업로드 메타데이터 수집
+4. 실행 revision·입력 체크섬·수집 요약 기록
+5. 원본 collection과 manifest를 Actions artifact로 업로드
+
+`limit=3`으로 파일럿을 검증한 뒤 `limit=0`으로 전체 공개 업로드를 수집합니다. 메타데이터 단계에서는 Shorts로 추정되지 않은 공개 업로드도 버리지 않습니다. 공개 API만으로 Shorts 여부를 확정할 수 없기 때문입니다.
+
+이 workflow를 처음 추가하는 pull request에서는 `.github/pilot/food-story-five.channels.txt`의 신규 5채널을 대상으로 채널당 3개 smoke sample을 먼저 검증하고, 성공한 경우 전체 공개 업로드(`limit=0`)까지 수집합니다. 병합 뒤의 일반 실행은 `workflow_dispatch` 입력을 사용합니다.
+
 ## Public transcript enrichment
 
 `collect`로 만든 단일 collection JSON에서 조회수 상위 Shorts의 공개 자막/자동자막 transcript를 보강할 수 있습니다.
