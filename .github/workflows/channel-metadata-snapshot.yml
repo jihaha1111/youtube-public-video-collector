@@ -1,0 +1,256 @@
+name: Channel metadata snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/pilot/food-story-five.channels.txt
+      - .github/workflows/channel-metadata-snapshot.yml
+      - src/yt_collector/channel_seed_resolver.py
+      - src/yt_collector/channel_url_parser.py
+      - src/yt_collector/cli.py
+      - src/yt_collector/mock_client.py
+      - src/yt_collector/youtube_client.py
+  workflow_dispatch:
+    inputs:
+      channels:
+        description: One public YouTube /channel/UC... or /@handle channel URL per line
+        required: true
+        type: string
+      limit:
+        description: Public uploads per channel; 0 means the full public uploads playlist
+        required: true
+        default: "3"
+
+concurrency:
+  group: channel-metadata-snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  collect-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install collector
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Materialize channel input list
+        env:
+          CHANNEL_INPUTS: ${{ github.event_name == 'workflow_dispatch' && inputs.channels || '' }}
+        run: |
+          mkdir -p output
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          raw_input = os.environ.get("CHANNEL_INPUTS", "")
+          if not raw_input.strip():
+              raw_input = Path(".github/pilot/food-story-five.channels.txt").read_text(encoding="utf-8")
+          lines = [line.strip() for line in raw_input.splitlines() if line.strip() and not line.strip().startswith("#")]
+          if not lines:
+              raise SystemExit("channels input must contain at least one channel URL")
+          Path("output/channel_inputs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"channel_inputs={len(lines)}")
+          PY
+
+      - name: Record run manifest
+        env:
+          INPUT_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '0' }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          input_bytes = Path("output/channel_inputs.txt").read_bytes()
+          manifest = {
+              "schema_version": 1,
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "git_revision": os.environ["GITHUB_SHA"],
+              "git_ref": os.environ["GITHUB_REF"],
+              "event_name": os.environ["GITHUB_EVENT_NAME"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "channel_inputs_sha256": hashlib.sha256(input_bytes).hexdigest(),
+              "settings": {
+                  "smoke_limit_per_channel": 3,
+                  "target_limit_per_channel": int(os.environ["INPUT_LIMIT"]),
+              },
+          }
+          Path("output/run_manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Resolve official channel IDs and public seed videos
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          if [ -z "$YOUTUBE_API_KEY" ]; then
+            echo "::error::Set the YOUTUBE_API_KEY repository secret before running this workflow."
+            exit 1
+          fi
+          python -m yt_collector.cli resolve-channel-seeds \
+            --channels-file output/channel_inputs.txt \
+            --out output/resolved_channel_seeds.json \
+            --seeds-out output/channel_seed_urls.txt
+
+      - name: Collect three-video metadata smoke sample
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          python -m yt_collector.cli collect \
+            --urls-file output/channel_seed_urls.txt \
+            --limit 3 \
+            --format json \
+            --out output/channel_metadata_smoke.json
+
+      - name: Validate smoke sample
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          resolved = json.loads(Path("output/resolved_channel_seeds.json").read_text(encoding="utf-8"))
+          payload = json.loads(Path("output/channel_metadata_smoke.json").read_text(encoding="utf-8"))
+          collections = payload if isinstance(payload, list) else [payload]
+          if len(collections) != resolved["resolved_count"]:
+              raise SystemExit("Smoke result count does not match resolved channel count")
+          failures = [item for item in collections if item.get("errors") or not item.get("channel_videos")]
+          if failures:
+              raise SystemExit(f"Smoke sample has {len(failures)} failed or empty channel result(s)")
+          print(f"smoke_channels={len(collections)}")
+          print(f"smoke_videos={sum(len(item['channel_videos']) for item in collections)}")
+          PY
+
+      - name: Collect requested metadata snapshot
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          TARGET_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '0' }}
+        run: |
+          if [ "$TARGET_LIMIT" = "3" ]; then
+            cp output/channel_metadata_smoke.json output/channel_metadata_collection.json
+          else
+            python -m yt_collector.cli collect \
+              --urls-file output/channel_seed_urls.txt \
+              --limit "$TARGET_LIMIT" \
+              --format json \
+              --out output/channel_metadata_collection.json
+          fi
+
+      - name: Validate and summarize metadata snapshot
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          resolved = json.loads(Path("output/resolved_channel_seeds.json").read_text(encoding="utf-8"))
+          collections = json.loads(Path("output/channel_metadata_collection.json").read_text(encoding="utf-8"))
+          if isinstance(collections, dict):
+              collections = [collections]
+
+          if resolved["error_count"]:
+              raise SystemExit(f"Channel resolution has {resolved['error_count']} error(s)")
+          if len(collections) != resolved["resolved_count"]:
+              raise SystemExit("Resolved channel count does not match collection result count")
+
+          resolved_ids = {
+              item["channel"]["normalized"]["channel_id"]
+              for item in resolved["channels"]
+              if item["status"] == "resolved"
+          }
+          collection_ids = {
+              item["channel"]["normalized"].get("channel_id")
+              for item in collections
+          }
+          if resolved_ids != collection_ids:
+              raise SystemExit("Resolved channel IDs do not match collected channel IDs")
+
+          error_results = [item for item in collections if item.get("errors")]
+          if error_results:
+              raise SystemExit(f"Metadata collection has {len(error_results)} result(s) with errors")
+
+          channel_rows = []
+          total_videos = 0
+          total_probable_shorts = 0
+          for item in collections:
+              channel = item["channel"]["normalized"]
+              videos = [video["normalized"] for video in item.get("channel_videos") or []]
+              probable_shorts = sum(1 for video in videos if video.get("is_probably_short"))
+              total_videos += len(videos)
+              total_probable_shorts += probable_shorts
+              channel_rows.append(
+                  {
+                      "channel_id": channel.get("channel_id"),
+                      "channel_title": channel.get("channel_title"),
+                      "declared_public_video_count": channel.get("video_count"),
+                      "collected_video_count": len(videos),
+                      "probable_short_count": probable_shorts,
+                      "warning_count": len(item.get("warnings") or []),
+                  }
+              )
+
+          summary = {
+              "schema_version": 1,
+              "channel_count": len(channel_rows),
+              "collected_video_count": total_videos,
+              "probable_short_count": total_probable_shorts,
+              "channels": channel_rows,
+          }
+          Path("output/metadata_summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          lines = [
+              f"channels={summary['channel_count']}",
+              f"collected_videos={summary['collected_video_count']}",
+              f"probable_shorts={summary['probable_short_count']}",
+          ]
+          print("\n".join(lines))
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write("## Channel metadata snapshot\n\n")
+              handle.write("```text\n" + "\n".join(lines) + "\n```\n\n")
+              handle.write("| Channel | Channel ID | Declared | Collected | Probable Shorts | Warnings |\n")
+              handle.write("|---|---|---:|---:|---:|---:|\n")
+              for row in channel_rows:
+                  handle.write(
+                      f"| {row['channel_title']} | `{row['channel_id']}` | "
+                      f"{row['declared_public_video_count']} | {row['collected_video_count']} | "
+                      f"{row['probable_short_count']} | {row['warning_count']} |\n"
+                  )
+          PY
+
+      - name: Upload metadata snapshot artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-metadata-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/channel_inputs.txt
+            output/channel_seed_urls.txt
+            output/resolved_channel_seeds.json
+            output/channel_metadata_smoke.json
+            output/channel_metadata_collection.json
+            output/metadata_summary.json
+            output/run_manifest.json
+          if-no-files-found: warn

@@ -69,6 +69,20 @@ class YouTubeDataApiClient:
         )
         return list(payload.get("items") or [])
 
+    def list_channels_by_handle(self, handle: str) -> list[dict[str, Any]]:
+        normalized_handle = handle.strip().removeprefix("@")
+        if not normalized_handle:
+            return []
+        payload = self._get(
+            "channels",
+            {
+                "part": ",".join(CHANNEL_PARTS),
+                "forHandle": normalized_handle,
+                "maxResults": 1,
+            },
+        )
+        return list(payload.get("items") or [])
+
     def list_playlist_items(self, playlist_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         if not playlist_id:
             return []
