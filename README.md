@@ -178,6 +178,8 @@ GitHub Actions의 기존 `Video list Scrapling transcripts` 워크플로는 신�
 
 `food-story-current-public-fallback-v1`은 기존 DOM 차단·패널 미발견 83편과 위 29편 실행에서 새로 확인된 비종결 실패 5편의 합집합 88편을 공개 자막 경로로 확인합니다. 4편 이하 22개 shard, 최대 병렬 20개로 실행하며 Chromium이나 DOM 수집은 반복하지 않습니다.
 
+`food-story-known-source-missing-public-fallback-v1`은 DS Archive 원문부터 대본이 비어 있던 음식썰쇼핑 기준 1편을 공개 자막 경로에서 최종 확인하는 단일 대상 큐입니다.
+
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
