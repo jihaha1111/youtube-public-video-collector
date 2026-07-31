@@ -12,7 +12,7 @@ on:
         required: true
         default: "5"
       language:
-        description: Preferred rendered transcript language code
+        description: Preferred rendered transcript language code; metadata-only skips transcript collection
         required: true
         default: ko
       timeout_ms:
@@ -56,14 +56,23 @@ jobs:
           cache: pip
 
       - name: Install project with Scrapling support
+        if: inputs.language != 'metadata-only'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[scrapling]"
 
+      - name: Install metadata collector only
+        if: inputs.language == 'metadata-only'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
       - name: Install Chromium for Scrapling/Patchright
+        if: inputs.language != 'metadata-only'
         run: python -m patchright install --with-deps chromium
 
       - name: Probe single-video rendered DOM transcript hard gate
+        if: inputs.language != 'metadata-only'
         env:
           SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
         run: |
@@ -100,7 +109,7 @@ jobs:
           PY
 
       - name: Upload single-video DOM probe artifact
-        if: always()
+        if: always() && inputs.language != 'metadata-only'
         uses: actions/upload-artifact@v4
         with:
           name: scrapling-dom-probe
@@ -110,19 +119,54 @@ jobs:
       - name: Collect channel metadata inside Actions
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          CHANNEL_SEED_URLS: ${{ inputs.url }}
         run: |
           if [ -z "$YOUTUBE_API_KEY" ]; then
             echo "::error::Set the YOUTUBE_API_KEY repository secret before running this workflow."
             exit 1
           fi
           mkdir -p output
-          python -m yt_collector.cli collect \
-            --url "${{ inputs.url }}" \
-            --limit "${{ inputs.limit }}" \
-            --format json \
-            --out output/channel_collection.json
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          urls = []
+          seen = set()
+          for raw_line in os.environ["CHANNEL_SEED_URLS"].splitlines():
+              url = raw_line.strip()
+              if not url or url in seen:
+                  continue
+              if not url.startswith(("https://www.youtube.com/watch?v=", "https://youtube.com/watch?v=", "https://www.youtube.com/shorts/", "https://youtube.com/shorts/", "https://youtu.be/")):
+                  raise SystemExit(f"Unsupported YouTube seed URL: {url}")
+              seen.add(url)
+              urls.append(url)
+
+          if not urls:
+              raise SystemExit("No valid YouTube seed URLs were provided")
+
+          Path("output/channel_seed_urls.txt").write_text(
+              "\n".join(urls) + "\n",
+              encoding="utf-8",
+          )
+          print(f"channel_seed_count={len(urls)}")
+          PY
+          SEED_COUNT="$(wc -l < output/channel_seed_urls.txt | tr -d ' ')"
+          if [ "$SEED_COUNT" = "1" ]; then
+            python -m yt_collector.cli collect \
+              --url "$(head -n 1 output/channel_seed_urls.txt)" \
+              --limit "${{ inputs.limit }}" \
+              --format json \
+              --out output/channel_collection.json
+          else
+            python -m yt_collector.cli collect \
+              --urls-file output/channel_seed_urls.txt \
+              --limit "${{ inputs.limit }}" \
+              --format json \
+              --out output/channel_collection.json
+          fi
 
       - name: Fetch rendered DOM transcripts through Scrapling inside Actions
+        if: inputs.language != 'metadata-only'
         env:
           SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
         run: |
@@ -147,6 +191,7 @@ jobs:
             --out output/channel_scrapling_transcripts.json
 
       - name: Summarize result
+        if: inputs.language != 'metadata-only'
         run: |
           python - <<'PY'
           import json
@@ -165,6 +210,7 @@ jobs:
           name: channel-scrapling-transcripts
           path: |
             output/channel_collection.json
+            output/channel_seed_urls.txt
             output/channel_scrapling_transcripts.json
             output/scrapling_dom_probe.json
           if-no-files-found: error
