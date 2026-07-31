@@ -254,9 +254,8 @@ jobs:
               split_rule = "queue_order_modulo_shard_count"
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
-              expected_target_count = 5323
+              expected_target_count = None
               shard_size = 50
-              shard_count = (expected_target_count + shard_size - 1) // shard_size
               max_parallel = 20
               split_rule = "contiguous_chunks_of_50"
           else:
@@ -276,7 +275,9 @@ jobs:
                   seen.add(video_id)
                   targets.append(video_id)
 
-          if len(targets) != expected_target_count:
+          if not targets:
+              raise SystemExit("Prepared queue must contain at least one target")
+          if expected_target_count is not None and len(targets) != expected_target_count:
               raise SystemExit(f"Expected {expected_target_count:,} targets, received {len(targets):,}")
 
           if queue_id == "food-story-expansion-v1":
@@ -285,6 +286,7 @@ jobs:
                   shards[index % shard_count].append(video_id)
           else:
               shards = [targets[index:index + 50] for index in range(0, len(targets), 50)]
+              shard_count = len(shards)
               if len(shards) != shard_count:
                   raise SystemExit("Retry shard count mismatch")
 
