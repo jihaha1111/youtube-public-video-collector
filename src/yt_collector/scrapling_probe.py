@@ -8,6 +8,7 @@ import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from .transcripts import _limit_ranked_videos, _video_transcript_item
 from .url_parser import parse_youtube_url
@@ -28,6 +29,7 @@ DOM_FAILURE_CLASSES = {
 DOM_EVIDENCE_SCRIPT_ID = "gjc-youtube-dom-transcript"
 
 ScraplingTranscriptFetcher = Callable[[str], dict[str, Any]]
+TranscriptProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def fetch_transcript_with_scrapling(
@@ -228,6 +230,7 @@ def collect_target_list_with_scrapling_transcripts(
     sleep_seconds: float = 0.0,
     stop_on_block: bool = True,
     fetch_one: ScraplingTranscriptFetcher | None = None,
+    progress_callback: TranscriptProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Fetch rendered DOM transcripts for an explicit ordered URL/video-ID list."""
     if limit < 0:
@@ -263,6 +266,50 @@ def collect_target_list_with_scrapling_transcripts(
 
     transcript_items: list[dict[str, Any]] = []
     stopped_by_block = False
+
+    def build_result() -> dict[str, Any]:
+        found_count = sum(
+            1 for item in transcript_items if item["transcript"].get("status") == "found"
+        )
+        failure_counts: dict[str, int] = {}
+        for item in transcript_items:
+            transcript = item["transcript"]
+            if transcript.get("status") == "found":
+                continue
+            failure_class = transcript.get("failure_class") or "unknown"
+            failure_counts[failure_class] = failure_counts.get(failure_class, 0) + 1
+        return {
+            "source_target_list": {
+                "requested_nonblank_targets": len(
+                    [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
+                ),
+                "unique_video_ids": len(targets),
+                "selected_video_ids": [target["video_id"] for target in selected_targets],
+                "duplicates_removed": len(
+                    [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
+                )
+                - len(targets),
+            },
+            "transcript_collection": {
+                "preferred_language": preferred_language,
+                "requested_limit": limit,
+                "attempted": len(transcript_items),
+                "found": found_count,
+                "missing": len(transcript_items) - found_count,
+                "failure_counts": dict(sorted(failure_counts.items())),
+                "fetcher": "scrapling.StealthyFetcher",
+                "source": DOM_TRANSCRIPT_SOURCE,
+                "timeout_ms": timeout_ms,
+                "wait_ms": wait_ms,
+                "headless": headless,
+                "used_proxy": bool(proxy),
+                "sleep_seconds": sleep_seconds,
+                "stopped_by_block": stopped_by_block,
+                "checkpoint_complete": len(transcript_items) == len(selected_targets),
+            },
+            "videos": list(transcript_items),
+        }
+
     for index, target in enumerate(selected_targets):
         video_id = target["video_id"]
         if stopped_by_block:
@@ -308,50 +355,12 @@ def collect_target_list_with_scrapling_transcripts(
                 ),
             }
         )
+        if progress_callback:
+            progress_callback(build_result())
         if sleep_seconds > 0 and index < len(selected_targets) - 1 and not stopped_by_block:
             time.sleep(sleep_seconds)
 
-    found_count = sum(
-        1 for item in transcript_items if item["transcript"].get("status") == "found"
-    )
-    failure_counts: dict[str, int] = {}
-    for item in transcript_items:
-        transcript = item["transcript"]
-        if transcript.get("status") == "found":
-            continue
-        failure_class = transcript.get("failure_class") or "unknown"
-        failure_counts[failure_class] = failure_counts.get(failure_class, 0) + 1
-
-    return {
-        "source_target_list": {
-            "requested_nonblank_targets": len(
-                [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
-            ),
-            "unique_video_ids": len(targets),
-            "selected_video_ids": [target["video_id"] for target in selected_targets],
-            "duplicates_removed": len(
-                [target for target in raw_targets if target.strip() and not target.strip().startswith("#")]
-            )
-            - len(targets),
-        },
-        "transcript_collection": {
-            "preferred_language": preferred_language,
-            "requested_limit": limit,
-            "attempted": len(transcript_items),
-            "found": found_count,
-            "missing": len(transcript_items) - found_count,
-            "failure_counts": dict(sorted(failure_counts.items())),
-            "fetcher": "scrapling.StealthyFetcher",
-            "source": DOM_TRANSCRIPT_SOURCE,
-            "timeout_ms": timeout_ms,
-            "wait_ms": wait_ms,
-            "headless": headless,
-            "used_proxy": bool(proxy),
-            "sleep_seconds": sleep_seconds,
-            "stopped_by_block": stopped_by_block,
-        },
-        "videos": transcript_items,
-    }
+    return build_result()
 
 
 def write_scrapling_target_list_transcripts(
@@ -368,6 +377,14 @@ def write_scrapling_target_list_transcripts(
     stop_on_block: bool = True,
 ) -> Path:
     targets = Path(targets_path).read_text(encoding="utf-8").splitlines()
+    output = Path(out_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    def write_checkpoint(result: dict[str, Any]) -> None:
+        temporary = output.with_name(f"{output.name}.tmp")
+        temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(output)
+
     result = collect_target_list_with_scrapling_transcripts(
         targets,
         limit=limit,
@@ -378,10 +395,9 @@ def write_scrapling_target_list_transcripts(
         proxy=proxy,
         sleep_seconds=sleep_seconds,
         stop_on_block=stop_on_block,
+        progress_callback=write_checkpoint,
     )
-    output = Path(out_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_checkpoint(result)
     return output
 
 
@@ -393,12 +409,28 @@ def extract_transcript_from_scrapling_response(
     **_: Any,
 ) -> dict[str, Any]:
     """Normalize rendered transcript-panel DOM evidence into the Scrapling transcript schema."""
+    response_status = _response_status(response)
+    response_url = _response_url(response)
+    response_evidence = {
+        "stage": "response_metadata",
+        "ok": response_status not in {403, 429} and not _looks_like_block_url(response_url),
+        "status": response_status,
+        "url": response_url,
+    }
+    if response_status in {403, 429} or _looks_like_block_url(response_url):
+        return _missing(
+            video_id,
+            "blocked_or_captcha",
+            f"Rendered request was redirected or rejected by an anti-automation page: status={response_status} url={response_url}",
+            stage_evidence=[response_evidence],
+        )
+
     text = _response_text(response)
     payload = _extract_dom_payload(text)
     if isinstance(payload, dict):
         return _transcript_from_dom_payload(video_id, payload, preferred_language=preferred_language)
 
-    stage_evidence = [{"stage": "response_html", "ok": True, "text_length": len(text)}]
+    stage_evidence = [response_evidence, {"stage": "response_html", "ok": True, "text_length": len(text)}]
     if _looks_like_block_text(text):
         return _missing(video_id, "blocked_or_captcha", "Rendered page appears blocked or challenged.", stage_evidence=stage_evidence)
     segments, evidence = extract_dom_transcript_segments(text)
@@ -539,7 +571,7 @@ async () => {
 
     await waitUntil('body_ready', () => document.body && textOf(document.body).length > 0, settleMaxMs);
     const bodyText = textOf(document.body).toLowerCase();
-    const blocked = /captcha|unusual traffic|confirm you're not a bot|robot|429|403/.test(bodyText);
+    const blocked = /captcha|unusual traffic|confirm you're not a bot|robot|automated quer|too many requests|429|403/.test(bodyText) || /google\.[^/]+\/sorry/.test(location.href);
     const consent = /accept all|reject all|i agree|동의|모두 수락/.test(bodyText);
     record('initial_page', {url: location.href, bodyTextLength: bodyText.length, blocked, consent, actionTimeoutMs, settleMaxMs, pollIntervalMs});
 
@@ -828,6 +860,40 @@ def _response_text(response: Any) -> str:
     return str(response)
 
 
+def _response_status(response: Any) -> int | None:
+    for attribute in ("status", "status_code"):
+        value = getattr(response, attribute, None)
+        if callable(value):
+            try:
+                value = value()
+            except TypeError:
+                value = None
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _response_url(response: Any) -> str:
+    value = getattr(response, "url", "")
+    if callable(value):
+        try:
+            value = value()
+        except TypeError:
+            value = ""
+    return str(value or "")
+
+
+def _looks_like_block_url(value: str) -> bool:
+    if not value:
+        return False
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    return (hostname == "google.com" or hostname.endswith(".google.com")) and path.startswith("/sorry")
+
+
 def _looks_like_block(transcript: dict[str, Any]) -> bool:
     if transcript.get("status") == "found":
         return False
@@ -855,6 +921,9 @@ def _looks_like_block_text(text: str) -> bool:
         "confirm you're not a bot",
         "captcha",
         "robot",
+        "automated queries",
+        "automated query",
+        "google.com/sorry",
     )
     return any(marker in lowered for marker in block_markers)
 

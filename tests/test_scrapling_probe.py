@@ -13,9 +13,18 @@ from yt_collector.scrapling_probe import (
 
 
 class FakeResponse:
-    def __init__(self, text: str, *, captured_xhr: list[object] | None = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        *,
+        captured_xhr: list[object] | None = None,
+        status: int | None = None,
+        url: str = "https://www.youtube.com/watch?v=Tb6DhFy9N_A",
+    ) -> None:
         self.text = text
         self.captured_xhr = captured_xhr or []
+        self.status = status
+        self.url = url
 
 
 MODERN_DOM = """
@@ -87,6 +96,31 @@ def test_missing_dom_schema_is_selector_drift() -> None:
     assert transcript["status"] == "missing"
     assert transcript["source"] == DOM_TRANSCRIPT_SOURCE
     assert transcript["failure_class"] == "selector_drift"
+
+
+def test_http_429_is_blocked_before_dom_parsing() -> None:
+    transcript = extract_transcript_from_scrapling_response(
+        "blocked429",
+        FakeResponse("We're sorry", status=429, url="https://www.google.com/sorry/index?continue=youtube"),
+    )
+
+    assert transcript["status"] == "missing"
+    assert transcript["failure_class"] == "blocked_or_captcha"
+    assert transcript["stage_evidence"][0]["status"] == 429
+
+
+def test_google_sorry_redirect_is_blocked_without_status_metadata() -> None:
+    transcript = extract_transcript_from_scrapling_response(
+        "sorry",
+        FakeResponse(
+            "Automated queries are not accepted",
+            url="https://www.google.com/sorry/index?continue=https%3A%2F%2Fyoutube.com%2Fwatch",
+        ),
+    )
+
+    assert transcript["status"] == "missing"
+    assert transcript["failure_class"] == "blocked_or_captcha"
+    assert "google.com/sorry" in transcript["stage_evidence"][0]["url"]
 
 
 def test_caption_tracks_only_input_cannot_produce_found() -> None:
@@ -338,3 +372,35 @@ def test_collect_target_list_limit_and_stop_on_block() -> None:
     assert result["transcript_collection"]["found"] == 0
     assert result["transcript_collection"]["stopped_by_block"] is True
     assert result["videos"][1]["transcript"]["errors"][0]["code"] == "skipped_after_block"
+
+
+def test_collect_target_list_emits_incremental_checkpoints() -> None:
+    checkpoints: list[dict] = []
+
+    def fake_fetch_one(url: str):
+        video_id = url.rsplit("=", 1)[-1]
+        return {
+            "transcript": {
+                "video_id": video_id,
+                "status": "found",
+                "source": DOM_TRANSCRIPT_SOURCE,
+                "language_code": "ko",
+                "segment_count": 1,
+                "text": video_id,
+                "segments": [{"start": "0:00", "start_seconds": 0.0, "text": video_id}],
+                "errors": [],
+                "failure_class": None,
+                "stage_evidence": [],
+            }
+        }
+
+    result = collect_target_list_with_scrapling_transcripts(
+        ["Tb6DhFy9N_A", "rGFXQlS9Cp4"],
+        fetch_one=fake_fetch_one,
+        progress_callback=checkpoints.append,
+    )
+
+    assert [item["transcript_collection"]["attempted"] for item in checkpoints] == [1, 2]
+    assert checkpoints[0]["transcript_collection"]["checkpoint_complete"] is False
+    assert checkpoints[1]["transcript_collection"]["checkpoint_complete"] is True
+    assert result == checkpoints[-1]

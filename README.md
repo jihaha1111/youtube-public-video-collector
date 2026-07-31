@@ -151,7 +151,9 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 `input_video_targets.txt`는 한 줄에 watch/Shorts/youtu.be URL 또는 11자리 video ID 하나를 넣습니다. GitHub Actions의 `Video list Scrapling transcripts` 워크플로도 같은 형식을 받으며, 실행 revision·run ID·입력 체크섬을 artifact manifest에 함께 기록합니다. 이 경로는 YouTube Data API channel 수집을 다시 실행하지 않습니다.
 
-`targets`에 `food-story-expansion-v1`을 지정하면 저장된 6,768개 대본 대기열을 20개 균형 shard로 나누고 `max-parallel: 20` matrix probe로 수집합니다. 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 대기열의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
+`targets`에 `food-story-expansion-v1`을 지정하면 저장된 6,768개 대본 대기열을 20개 균형 shard로 나눠 수집합니다. 1차 병렬 실행 뒤에는 `food-story-expansion-retry-v1`을 사용할 수 있습니다. 이 큐는 미확보 5,323편을 50편 이하 107개 shard로 나누고 `max-parallel: 2`로 실행해 차단 영향을 한 shard 안으로 제한합니다. Google Sorry URL이나 HTTP 403·429는 즉시 `blocked_or_captcha`로 판정하며, 명시 목록 결과는 영상마다 원자적으로 체크포인트됩니다.
+
+마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: One public YouTube URL or video ID per line; food-story-expansion-v1 runs the prepared sharded queue
+        description: One public YouTube URL or video ID per line; expansion queue IDs run prepared sharded collection
         required: true
         type: string
       limit:
@@ -43,13 +43,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: video-list-scrapling-${{ inputs.targets == 'food-story-expansion-v1' && 'food-story-expansion-v1' || github.run_id }}
+  group: video-list-scrapling-${{ (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1') && inputs.targets || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   direct:
     name: collect direct target list
-    if: inputs.targets != 'food-story-expansion-v1'
+    if: inputs.targets != 'food-story-expansion-v1' && inputs.targets != 'food-story-expansion-retry-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -212,13 +212,14 @@ jobs:
           if-no-files-found: warn
 
   prepare-shards:
-    name: prepare 20 transcript shards
-    if: inputs.targets == 'food-story-expansion-v1'
+    name: prepare transcript shards
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
       target_count: ${{ steps.prepare.outputs.target_count }}
       shard_count: ${{ steps.prepare.outputs.shard_count }}
+      max_parallel: ${{ steps.prepare.outputs.max_parallel }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -226,6 +227,7 @@ jobs:
       - name: Prepare balanced shard inputs
         id: prepare
         env:
+          QUEUE_ID: ${{ inputs.targets }}
           INPUT_LANGUAGE: ${{ inputs.language }}
           INPUT_TIMEOUT_MS: ${{ inputs.timeout_ms }}
           INPUT_WAIT_MS: ${{ inputs.wait_ms }}
@@ -241,9 +243,24 @@ jobs:
           import re
           from pathlib import Path
 
-          source_files = sorted(Path("inputs/food-story-expansion-v1").glob("batch-*.txt"))
-          if len(source_files) != 17:
-              raise SystemExit(f"Expected 17 source batches, received {len(source_files)}")
+          queue_id = os.environ["QUEUE_ID"]
+          if queue_id == "food-story-expansion-v1":
+              source_files = sorted(Path("inputs/food-story-expansion-v1").glob("batch-*.txt"))
+              if len(source_files) != 17:
+                  raise SystemExit(f"Expected 17 source batches, received {len(source_files)}")
+              expected_target_count = 6768
+              shard_count = 20
+              max_parallel = 20
+              split_rule = "queue_order_modulo_shard_count"
+          elif queue_id == "food-story-expansion-retry-v1":
+              source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
+              expected_target_count = 5323
+              shard_size = 50
+              shard_count = (expected_target_count + shard_size - 1) // shard_size
+              max_parallel = 2
+              split_rule = "contiguous_chunks_of_50"
+          else:
+              raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
           targets = []
           seen = set()
@@ -259,23 +276,28 @@ jobs:
                   seen.add(video_id)
                   targets.append(video_id)
 
-          if len(targets) != 6768:
-              raise SystemExit(f"Expected 6,768 targets, received {len(targets)}")
+          if len(targets) != expected_target_count:
+              raise SystemExit(f"Expected {expected_target_count:,} targets, received {len(targets):,}")
 
-          shard_count = 20
-          shards = [[] for _ in range(shard_count)]
-          for index, video_id in enumerate(targets):
-              shards[index % shard_count].append(video_id)
+          if queue_id == "food-story-expansion-v1":
+              shards = [[] for _ in range(shard_count)]
+              for index, video_id in enumerate(targets):
+                  shards[index % shard_count].append(video_id)
+          else:
+              shards = [targets[index:index + 50] for index in range(0, len(targets), 50)]
+              if len(shards) != shard_count:
+                  raise SystemExit("Retry shard count mismatch")
 
+          shard_width = max(2, len(str(shard_count)))
           for index, shard in enumerate(shards, start=1):
-              Path(f"prepared/shards/shard-{index:02d}.txt").write_text(
+              Path(f"prepared/shards/shard-{index:0{shard_width}d}.txt").write_text(
                   "\n".join(shard) + "\n",
                   encoding="utf-8",
               )
 
           all_targets_text = "\n".join(targets) + "\n"
           Path("prepared/all_targets.txt").write_text(all_targets_text, encoding="utf-8")
-          matrix = {"shard": [f"{index:02d}" for index in range(1, shard_count + 1)]}
+          matrix = {"shard": [f"{index:0{shard_width}d}" for index in range(1, shard_count + 1)]}
           Path("prepared/matrix.json").write_text(json.dumps(matrix), encoding="utf-8")
           manifest = {
               "schema_version": 1,
@@ -284,10 +306,10 @@ jobs:
               "git_revision": os.environ["GITHUB_SHA"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "queue_id": "food-story-expansion-v1",
+              "queue_id": queue_id,
               "target_count": len(targets),
               "shard_count": shard_count,
-              "split_rule": "queue_order_modulo_shard_count",
+              "split_rule": split_rule,
               "targets_sha256": hashlib.sha256(all_targets_text.encode()).hexdigest(),
               "settings": {
                   "language": os.environ["INPUT_LANGUAGE"],
@@ -296,7 +318,7 @@ jobs:
                   "sleep_seconds": float(os.environ["INPUT_SLEEP_SECONDS"]),
                   "headless": os.environ["INPUT_HEADLESS"] == "true",
                   "stop_on_block": os.environ["INPUT_STOP_ON_BLOCK"] == "true",
-                  "max_parallel": 20,
+                  "max_parallel": max_parallel,
               },
           }
           Path("prepared/run_manifest.json").write_text(
@@ -307,7 +329,8 @@ jobs:
               output.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
               output.write(f"target_count={len(targets)}\n")
               output.write(f"shard_count={shard_count}\n")
-          print(f"targets={len(targets)} shards={shard_count}")
+              output.write(f"max_parallel={max_parallel}\n")
+          print(f"queue={queue_id} targets={len(targets)} shards={shard_count} max_parallel={max_parallel}")
           PY
 
       - name: Upload prepared transcript shards
@@ -320,12 +343,12 @@ jobs:
   probe-shards:
     name: probe transcript shard ${{ matrix.shard }}
     needs: prepare-shards
-    if: inputs.targets == 'food-story-expansion-v1'
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: ${{ fromJSON(needs.prepare-shards.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.prepare-shards.outputs.matrix) }}
     steps:
       - name: Check out repository
@@ -409,7 +432,7 @@ jobs:
     needs:
       - prepare-shards
       - probe-shards
-    if: ${{ always() && inputs.targets == 'food-story-expansion-v1' && needs.prepare-shards.result == 'success' }}
+    if: ${{ always() && (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1') && needs.prepare-shards.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -437,6 +460,7 @@ jobs:
           from pathlib import Path
 
           targets = [line.strip() for line in Path("prepared/all_targets.txt").read_text(encoding="utf-8").splitlines() if line.strip()]
+          manifest = json.loads(Path("prepared/run_manifest.json").read_text(encoding="utf-8"))
           target_set = set(targets)
           result_files = sorted(Path("all-shard-results").glob("shard-*.json"))
           videos_by_id = {}
@@ -480,7 +504,7 @@ jobs:
                   "retry_count": len(retry_targets),
                   "failure_counts": dict(sorted(failure_counts.items())),
                   "source": "scrapling_rendered_dom_transcript",
-                  "shard_count_expected": 20,
+                  "shard_count_expected": manifest["shard_count"],
                   "shard_count_returned": len(result_files),
                   "stopped_by_block_shards": sum(bool(summary.get("stopped_by_block")) for summary in shard_summaries),
               },
@@ -488,7 +512,7 @@ jobs:
           }
           summary = {
               **merged["transcript_collection"],
-              "targets_sha256": json.loads(Path("prepared/run_manifest.json").read_text(encoding="utf-8"))["targets_sha256"],
+              "targets_sha256": manifest["targets_sha256"],
               "shards": shard_summaries,
           }
           Path("merged/video_list_scrapling_transcripts.json").write_text(
