@@ -43,13 +43,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: video-list-scrapling-${{ (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1') && inputs.targets || github.run_id }}
+  group: video-list-scrapling-${{ (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1' || inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1') && inputs.targets || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   direct:
     name: collect direct target list
-    if: inputs.targets != 'food-story-expansion-v1' && inputs.targets != 'food-story-expansion-retry-v1' && inputs.targets != 'food-story-new-11-v1' && inputs.targets != 'food-story-new-11-retry-round-01-v1' && inputs.targets != 'food-story-new-11-retry-round-02-v1' && inputs.targets != 'food-story-new-11-retry-round-03-v1'
+    if: inputs.targets != 'food-story-expansion-v1' && inputs.targets != 'food-story-expansion-retry-v1' && inputs.targets != 'food-story-new-11-v1' && inputs.targets != 'food-story-new-11-retry-round-01-v1' && inputs.targets != 'food-story-new-11-retry-round-02-v1' && inputs.targets != 'food-story-new-11-retry-round-03-v1' && inputs.targets != 'food-story-new-11-public-fallback-smoke-v1' && inputs.targets != 'food-story-new-11-public-fallback-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -213,7 +213,7 @@ jobs:
 
   prepare-shards:
     name: prepare transcript shards
-    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1'
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1' || inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
@@ -284,6 +284,18 @@ jobs:
               shard_size = 20
               max_parallel = 20
               split_rule = "contiguous_chunks_of_20"
+          elif queue_id == "food-story-new-11-public-fallback-smoke-v1":
+              source_files = [Path("inputs/food-story-new-11-public-fallback-smoke-v1/targets.txt")]
+              expected_target_count = 2
+              shard_size = 1
+              max_parallel = 2
+              split_rule = "contiguous_chunks_of_1"
+          elif queue_id == "food-story-new-11-public-fallback-v1":
+              source_files = [Path("inputs/food-story-new-11-public-fallback-v1/targets.txt")]
+              expected_target_count = 24
+              shard_size = 4
+              max_parallel = 6
+              split_rule = "contiguous_chunks_of_4"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
@@ -372,7 +384,7 @@ jobs:
   probe-shards:
     name: probe transcript shard ${{ matrix.shard }}
     needs: prepare-shards
-    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1'
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1' || inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1'
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
@@ -390,11 +402,19 @@ jobs:
           cache: pip
 
       - name: Install project with Scrapling support
+        if: inputs.targets != 'food-story-new-11-public-fallback-smoke-v1' && inputs.targets != 'food-story-new-11-public-fallback-v1'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[scrapling]"
 
+      - name: Install project for public transcript fallback
+        if: inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
       - name: Install Chromium for Scrapling/Patchright
+        if: inputs.targets != 'food-story-new-11-public-fallback-smoke-v1' && inputs.targets != 'food-story-new-11-public-fallback-v1'
         run: python -m patchright install --with-deps chromium
 
       - name: Download prepared transcript shards
@@ -404,6 +424,7 @@ jobs:
           path: prepared
 
       - name: Fetch rendered DOM transcript shard
+        if: inputs.targets != 'food-story-new-11-public-fallback-smoke-v1' && inputs.targets != 'food-story-new-11-public-fallback-v1'
         env:
           SHARD: ${{ matrix.shard }}
           SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
@@ -428,9 +449,29 @@ jobs:
             $BLOCK_FLAG \
             --out "shard-results/shard-${SHARD}.json"
 
+      - name: Fetch public transcript fallback shard
+        if: inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1'
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mkdir -p shard-results
+          BLOCK_FLAG="--stop-on-ip-block"
+          if [ "${{ inputs.stop_on_block }}" != "true" ]; then
+            BLOCK_FLAG="--keep-going"
+          fi
+          python -m yt_collector.cli public-transcript-list \
+            --targets-file "prepared/shards/shard-${SHARD}.txt" \
+            --limit 0 \
+            --language "${{ inputs.language }}" \
+            --timeout-seconds 20 \
+            --sleep-seconds "${{ inputs.sleep_seconds }}" \
+            $BLOCK_FLAG \
+            --out "shard-results/shard-${SHARD}.json"
+
       - name: Validate shard result
         env:
           SHARD: ${{ matrix.shard }}
+          QUEUE_ID: ${{ inputs.targets }}
         run: |
           python - <<'PY'
           import json
@@ -441,7 +482,16 @@ jobs:
           payload = json.loads(Path(f"shard-results/shard-{shard}.json").read_text(encoding="utf-8"))
           summary = payload.get("transcript_collection") or {}
           videos = payload.get("videos") or []
-          if summary.get("source") != "scrapling_rendered_dom_transcript":
+          public_queue = os.environ["QUEUE_ID"] in {
+              "food-story-new-11-public-fallback-smoke-v1",
+              "food-story-new-11-public-fallback-v1",
+          }
+          expected_source = (
+              "youtube-transcript-api-with-watch-page-fallback"
+              if public_queue
+              else "scrapling_rendered_dom_transcript"
+          )
+          if summary.get("source") != expected_source:
               raise SystemExit(f"Unexpected source for shard {shard}")
           if summary.get("attempted") != len(videos):
               raise SystemExit(f"Attempted/video mismatch for shard {shard}")
@@ -461,7 +511,7 @@ jobs:
     needs:
       - prepare-shards
       - probe-shards
-    if: ${{ always() && (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1') && needs.prepare-shards.result == 'success' }}
+    if: ${{ always() && (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1' || inputs.targets == 'food-story-new-11-retry-round-02-v1' || inputs.targets == 'food-story-new-11-retry-round-03-v1' || inputs.targets == 'food-story-new-11-public-fallback-smoke-v1' || inputs.targets == 'food-story-new-11-public-fallback-v1') && needs.prepare-shards.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -481,10 +531,13 @@ jobs:
           merge-multiple: true
 
       - name: Merge transcript shard results
+        env:
+          QUEUE_ID: ${{ inputs.targets }}
         run: |
           mkdir -p merged
           python - <<'PY'
           import json
+          import os
           from collections import Counter
           from pathlib import Path
 
@@ -516,13 +569,23 @@ jobs:
               if transcript.get("status") == "found":
                   found += 1
               else:
-                  failure_class = transcript.get("failure_class") or "unknown"
+                  errors = transcript.get("errors") or []
+                  first_error_code = (
+                      errors[0].get("code")
+                      if errors and isinstance(errors[0], dict)
+                      else None
+                  )
+                  failure_class = transcript.get("failure_class") or first_error_code or "unknown"
                   failure_counts[failure_class] += 1
                   if failure_class != "segments_empty":
                       retry_targets.append(video["video_id"])
           retry_targets.extend(not_returned)
           failure_counts["shard_result_not_returned"] += len(not_returned)
 
+          public_queue = os.environ["QUEUE_ID"] in {
+              "food-story-new-11-public-fallback-smoke-v1",
+              "food-story-new-11-public-fallback-v1",
+          }
           merged = {
               "transcript_collection": {
                   "preferred_language": "${{ inputs.language }}",
@@ -534,10 +597,17 @@ jobs:
                   "not_returned": len(not_returned),
                   "retry_count": len(retry_targets),
                   "failure_counts": dict(sorted(failure_counts.items())),
-                  "source": "scrapling_rendered_dom_transcript",
+                  "source": (
+                      "youtube-transcript-api-with-watch-page-fallback"
+                      if public_queue
+                      else "scrapling_rendered_dom_transcript"
+                  ),
                   "shard_count_expected": manifest["shard_count"],
                   "shard_count_returned": len(result_files),
-                  "stopped_by_block_shards": sum(bool(summary.get("stopped_by_block")) for summary in shard_summaries),
+                  "stopped_by_block_shards": sum(
+                      bool(summary.get("stopped_by_block") or summary.get("stopped_by_ip_block"))
+                      for summary in shard_summaries
+                  ),
               },
               "videos": ordered_videos,
           }

@@ -108,7 +108,7 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
   --out output/public_target_transcripts.json
 ```
 
-GitHub Actions의 `Video list public transcripts` 워크플로는 신규 11채널 DOM 잔여 24편을 OCR 없이 재확인합니다. 먼저 `food-story-new-11-public-fallback-smoke-v1` 2편을 각각 독립 shard로 확인하고, 전체 큐 `food-story-new-11-public-fallback-v1`은 4편 이하 6개 shard로 병렬 실행합니다. 결과는 원래 입력 순서로 병합하며 공개 자막 미확보 항목도 오류 코드와 함께 보존합니다.
+GitHub Actions의 기존 `Video list Scrapling transcripts` 워크플로는 신규 11채널 DOM 잔여 24편을 공개 자막 fallback 모드로도 실행합니다. 먼저 `food-story-new-11-public-fallback-smoke-v1` 2편을 각각 독립 shard로 확인하고, 전체 큐 `food-story-new-11-public-fallback-v1`은 4편 이하 6개 shard로 병렬 실행합니다. fallback 큐에서는 Chromium을 설치하거나 DOM을 다시 조회하지 않으며 결과의 `source`를 `youtube-transcript-api-with-watch-page-fallback`으로 분리합니다. 결과는 원래 입력 순서로 병합하고 공개 자막 미확보 항목도 오류 코드와 함께 보존합니다.
 
 ## Scrapling/Patchright rendered DOM transcript
 
