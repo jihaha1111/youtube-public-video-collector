@@ -254,10 +254,10 @@ jobs:
               split_rule = "queue_order_modulo_shard_count"
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
-              expected_target_count = 979
-              shard_count = 20
+              expected_target_count = 928
+              shard_size = 20
               max_parallel = 20
-              split_rule = "queue_order_modulo_shard_count"
+              split_rule = "contiguous_chunks_of_20"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
@@ -280,9 +280,16 @@ jobs:
           if expected_target_count is not None and len(targets) != expected_target_count:
               raise SystemExit(f"Expected {expected_target_count:,} targets, received {len(targets):,}")
 
-          shards = [[] for _ in range(shard_count)]
-          for index, video_id in enumerate(targets):
-              shards[index % shard_count].append(video_id)
+          if queue_id == "food-story-expansion-v1":
+              shards = [[] for _ in range(shard_count)]
+              for index, video_id in enumerate(targets):
+                  shards[index % shard_count].append(video_id)
+          else:
+              shards = [
+                  targets[index:index + shard_size]
+                  for index in range(0, len(targets), shard_size)
+              ]
+              shard_count = len(shards)
 
           shard_width = max(2, len(str(shard_count)))
           for index, shard in enumerate(shards, start=1):
