@@ -257,7 +257,7 @@ jobs:
               expected_target_count = 5323
               shard_size = 50
               shard_count = (expected_target_count + shard_size - 1) // shard_size
-              max_parallel = 2
+              max_parallel = 20
               split_rule = "contiguous_chunks_of_50"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
