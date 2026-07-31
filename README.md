@@ -151,7 +151,7 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 `input_video_targets.txt`는 한 줄에 watch/Shorts/youtu.be URL 또는 11자리 video ID 하나를 넣습니다. GitHub Actions의 `Video list Scrapling transcripts` 워크플로도 같은 형식을 받으며, 실행 revision·run ID·입력 체크섬을 artifact manifest에 함께 기록합니다. 이 경로는 YouTube Data API channel 수집을 다시 실행하지 않습니다.
 
-`targets`에 `food-story-expansion-v1`을 지정하면 제외 채널 정리 후 저장된 4,037개 대본 대기열을 20개 균형 shard로 나눠 수집합니다. 1차 병렬 실행 뒤에는 `food-story-expansion-retry-v1`을 사용할 수 있습니다. 현재 재시도 큐 40편은 20편 이하 2개 shard로 나눠 동시에 실행합니다. Google Sorry URL이나 HTTP 403·429는 즉시 `blocked_or_captcha`로 판정해 해당 shard를 끝내며, 명시 목록 결과는 영상마다 원자적으로 체크포인트됩니다. 한 라운드가 끝나면 병합 artifact의 `retry_targets.txt`는 성공분과 `segments_empty`를 자동으로 제외합니다.
+`targets`에 `food-story-expansion-v1`을 지정하면 제외 채널 정리 후 저장된 3,812개 대본 대기열을 20개 균형 shard로 나눠 수집합니다. 1차 병렬 실행 뒤에는 `food-story-expansion-retry-v1`을 사용할 수 있습니다. 현재 재시도 큐 36편은 20편 이하 2개 shard로 나눠 동시에 실행합니다. Google Sorry URL이나 HTTP 403·429는 즉시 `blocked_or_captcha`로 판정해 해당 shard를 끝내며, 명시 목록 결과는 영상마다 원자적으로 체크포인트됩니다. 한 라운드가 끝나면 병합 artifact의 `retry_targets.txt`는 성공분과 `segments_empty`를 자동으로 제외합니다.
 
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
