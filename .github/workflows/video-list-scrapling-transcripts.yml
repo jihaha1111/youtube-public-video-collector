@@ -254,7 +254,7 @@ jobs:
               split_rule = "queue_order_modulo_shard_count"
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
-              expected_target_count = 928
+              expected_target_count = 64
               shard_size = 20
               max_parallel = 20
               split_rule = "contiguous_chunks_of_20"
