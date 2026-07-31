@@ -255,9 +255,9 @@ jobs:
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
               expected_target_count = None
-              shard_size = 50
+              shard_size = 20
               max_parallel = 20
-              split_rule = "contiguous_chunks_of_50"
+              split_rule = "contiguous_chunks_of_20"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
@@ -285,7 +285,10 @@ jobs:
               for index, video_id in enumerate(targets):
                   shards[index % shard_count].append(video_id)
           else:
-              shards = [targets[index:index + 50] for index in range(0, len(targets), 50)]
+              shards = [
+                  targets[index:index + shard_size]
+                  for index in range(0, len(targets), shard_size)
+              ]
               shard_count = len(shards)
               if len(shards) != shard_count:
                   raise SystemExit("Retry shard count mismatch")
