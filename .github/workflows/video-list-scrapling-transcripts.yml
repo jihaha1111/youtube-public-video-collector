@@ -246,9 +246,9 @@ jobs:
           queue_id = os.environ["QUEUE_ID"]
           if queue_id == "food-story-expansion-v1":
               source_files = sorted(Path("inputs/food-story-expansion-v1").glob("batch-*.txt"))
-              if len(source_files) != 17:
-                  raise SystemExit(f"Expected 17 source batches, received {len(source_files)}")
-              expected_target_count = 6768
+              if len(source_files) != 13:
+                  raise SystemExit(f"Expected 13 source batches, received {len(source_files)}")
+              expected_target_count = 4827
               shard_count = 20
               max_parallel = 20
               split_rule = "queue_order_modulo_shard_count"
