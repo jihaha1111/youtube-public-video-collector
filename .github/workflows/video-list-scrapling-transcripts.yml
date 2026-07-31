@@ -349,7 +349,7 @@ jobs:
     name: probe transcript shard ${{ matrix.shard }}
     needs: prepare-shards
     if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
