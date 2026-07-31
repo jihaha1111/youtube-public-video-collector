@@ -153,6 +153,8 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 `targets`에 `food-story-expansion-v1`을 지정하면 제외 채널 정리 후 저장된 3,812개 대본 대기열을 20개 균형 shard로 나눠 수집합니다. 1차 병렬 실행 뒤에는 `food-story-expansion-retry-v1`을 사용할 수 있습니다. 현재 재시도 큐 36편은 20편 이하 2개 shard로 나눠 동시에 실행합니다. Google Sorry URL이나 HTTP 403·429는 즉시 `blocked_or_captcha`로 판정해 해당 shard를 끝내며, 명시 목록 결과는 영상마다 원자적으로 체크포인트됩니다. 한 라운드가 끝나면 병합 artifact의 `retry_targets.txt`는 성공분과 `segments_empty`를 자동으로 제외합니다.
 
+`food-story-new-11-v1`은 목표 50채널에 새로 추가된 11채널의 쇼츠 추정 1,305편을 20개 균형 shard로 수집합니다. 입력은 `inputs/food-story-new-11-v1/`의 400·400·400·105편 체크섬 배치이며 기존 확장 큐와 겹치지 않습니다.
+
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
