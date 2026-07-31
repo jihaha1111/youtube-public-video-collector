@@ -159,6 +159,8 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 `food-story-new-11-retry-round-02-v1`은 재시도 1차에서 대본 284편과 새 `segments_empty` 27편을 제외한 84편만 재시도합니다. `inputs/food-story-new-11-retry-round-02-v1/retry-targets.txt`를 20편 이하 5개 shard로 나눠 병렬 실행합니다.
 
+`food-story-new-11-retry-round-03-v1`은 재시도 2차에서 대본 50편과 새 `segments_empty` 10편을 제외한 24편만 재시도합니다. `inputs/food-story-new-11-retry-round-03-v1/retry-targets.txt`를 20편과 4편의 2개 shard로 나눠 병렬 실행합니다.
+
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
