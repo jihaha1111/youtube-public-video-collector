@@ -43,13 +43,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: video-list-scrapling-${{ (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1') && inputs.targets || github.run_id }}
+  group: video-list-scrapling-${{ (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1') && inputs.targets || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   direct:
     name: collect direct target list
-    if: inputs.targets != 'food-story-expansion-v1' && inputs.targets != 'food-story-expansion-retry-v1' && inputs.targets != 'food-story-new-11-v1'
+    if: inputs.targets != 'food-story-expansion-v1' && inputs.targets != 'food-story-expansion-retry-v1' && inputs.targets != 'food-story-new-11-v1' && inputs.targets != 'food-story-new-11-retry-round-01-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -213,7 +213,7 @@ jobs:
 
   prepare-shards:
     name: prepare transcript shards
-    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1'
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
@@ -266,6 +266,12 @@ jobs:
               shard_count = 20
               max_parallel = 20
               split_rule = "queue_order_modulo_shard_count"
+          elif queue_id == "food-story-new-11-retry-round-01-v1":
+              source_files = [Path("inputs/food-story-new-11-retry-round-01-v1/retry-targets.txt")]
+              expected_target_count = 395
+              shard_size = 20
+              max_parallel = 20
+              split_rule = "contiguous_chunks_of_20"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
@@ -354,7 +360,7 @@ jobs:
   probe-shards:
     name: probe transcript shard ${{ matrix.shard }}
     needs: prepare-shards
-    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1'
+    if: inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1'
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
@@ -443,7 +449,7 @@ jobs:
     needs:
       - prepare-shards
       - probe-shards
-    if: ${{ always() && (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1') && needs.prepare-shards.result == 'success' }}
+    if: ${{ always() && (inputs.targets == 'food-story-expansion-v1' || inputs.targets == 'food-story-expansion-retry-v1' || inputs.targets == 'food-story-new-11-v1' || inputs.targets == 'food-story-new-11-retry-round-01-v1') && needs.prepare-shards.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

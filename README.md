@@ -155,6 +155,8 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 `food-story-new-11-v1`은 목표 50채널에 새로 추가된 11채널의 쇼츠 추정 1,305편을 20개 균형 shard로 수집합니다. 입력은 `inputs/food-story-new-11-v1/`의 400·400·400·105편 체크섬 배치이며 기존 확장 큐와 겹치지 않습니다.
 
+`food-story-new-11-retry-round-01-v1`은 위 1차 실행에서 대본 821편과 `segments_empty` 89편을 제외한 차단·패널 미발견 395편만 재시도합니다. `inputs/food-story-new-11-retry-round-01-v1/retry-targets.txt`를 20편 이하 20개 shard로 나눠 병렬 실행합니다.
+
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
