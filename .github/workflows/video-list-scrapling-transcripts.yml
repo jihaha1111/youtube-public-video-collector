@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: One public YouTube URL or 11-character video ID per line
+        description: One public YouTube URL or video ID per line; food-story-expansion-v1 runs the prepared sharded queue
         required: true
         type: string
       limit:
@@ -38,19 +38,20 @@ on:
         required: true
         default: true
 
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: video-list-scrapling-${{ inputs.targets == 'food-story-expansion-v1' && 'food-story-expansion-v1' || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
-  collect-transcripts:
-    name: collect-transcripts-${{ matrix.batch }}
+  direct:
+    name: collect direct target list
+    if: inputs.targets != 'food-story-expansion-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        batch: ${{ fromJSON(inputs.targets == 'food-story-expansion-v1' && '["02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17"]' || '["direct"]') }}
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -72,27 +73,20 @@ jobs:
       - name: Materialize explicit target list
         env:
           VIDEO_TARGETS: ${{ inputs.targets }}
-          EXECUTION_BATCH: ${{ matrix.batch }}
         run: |
           mkdir -p output
           python - <<'PY'
           import os
           from pathlib import Path
 
-          execution_batch = os.environ["EXECUTION_BATCH"]
-          if execution_batch == "direct":
-              raw_lines = os.environ["VIDEO_TARGETS"].splitlines()
-          else:
-              source_path = Path(
-                  f"inputs/food-story-expansion-v1/batch-{execution_batch}.txt"
-              )
-              raw_lines = source_path.read_text(encoding="utf-8").splitlines()
-
-          lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
+          lines = [
+              line.strip()
+              for line in os.environ["VIDEO_TARGETS"].splitlines()
+              if line.strip() and not line.strip().startswith("#")
+          ]
           if not lines:
               raise SystemExit("targets input must contain at least one URL or video ID")
           Path("output/video_targets.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-          print(f"execution_batch={execution_batch}")
           print(f"targets={len(lines)}")
           PY
 
@@ -105,7 +99,6 @@ jobs:
           INPUT_SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
           INPUT_HEADLESS: ${{ inputs.headless }}
           INPUT_STOP_ON_BLOCK: ${{ inputs.stop_on_block }}
-          EXECUTION_BATCH: ${{ matrix.batch }}
         run: |
           python - <<'PY'
           import hashlib
@@ -121,7 +114,6 @@ jobs:
               "git_revision": os.environ["GITHUB_SHA"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "execution_batch": os.environ["EXECUTION_BATCH"],
               "targets_sha256": hashlib.sha256(target_bytes).hexdigest(),
               "settings": {
                   "limit": int(os.environ["INPUT_LIMIT"]),
@@ -156,7 +148,6 @@ jobs:
             --out output/scrapling_dom_probe.json
           python - <<'PY'
           import json
-          import os
           from pathlib import Path
 
           payload = json.loads(Path("output/scrapling_dom_probe.json").read_text(encoding="utf-8"))
@@ -192,47 +183,337 @@ jobs:
             $BLOCK_FLAG \
             --out output/video_list_scrapling_transcripts.json
 
-      - name: Validate and summarize result
+      - name: Validate direct result
         run: |
           python - <<'PY'
           import json
-          import os
           from pathlib import Path
 
-          payload = json.loads(
-              Path("output/video_list_scrapling_transcripts.json").read_text(encoding="utf-8")
-          )
+          payload = json.loads(Path("output/video_list_scrapling_transcripts.json").read_text(encoding="utf-8"))
           summary = payload.get("transcript_collection") or {}
           videos = payload.get("videos") or []
           if summary.get("source") != "scrapling_rendered_dom_transcript":
               raise SystemExit(f"Unexpected collection source: {summary.get('source')!r}")
           if summary.get("attempted") != len(videos):
               raise SystemExit("Attempted count does not match output video count")
-          for item in videos:
-              transcript = item.get("transcript") or {}
-              if transcript.get("source") != "scrapling_rendered_dom_transcript":
-                  raise SystemExit(f"Unexpected item source: {item.get('video_id')}")
-          lines = [
-              f"attempted={summary.get('attempted')}",
-              f"found={summary.get('found')}",
-              f"missing={summary.get('missing')}",
-              f"stopped_by_block={summary.get('stopped_by_block')}",
-              f"failure_counts={summary.get('failure_counts')}",
-          ]
-          print("\n".join(lines))
-          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
-              handle.write("## Explicit-list DOM transcript result\n\n")
-              handle.write("```text\n" + "\n".join(lines) + "\n```\n")
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
           PY
 
-      - name: Upload explicit-list transcript artifacts
+      - name: Upload direct transcript artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-list-scrapling-transcripts-${{ matrix.batch }}
+          name: video-list-scrapling-transcripts
           path: |
             output/video_targets.txt
             output/run_manifest.json
             output/scrapling_dom_probe.json
             output/video_list_scrapling_transcripts.json
           if-no-files-found: warn
+
+  prepare-shards:
+    name: prepare 20 transcript shards
+    if: inputs.targets == 'food-story-expansion-v1'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      target_count: ${{ steps.prepare.outputs.target_count }}
+      shard_count: ${{ steps.prepare.outputs.shard_count }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare balanced shard inputs
+        id: prepare
+        env:
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          INPUT_TIMEOUT_MS: ${{ inputs.timeout_ms }}
+          INPUT_WAIT_MS: ${{ inputs.wait_ms }}
+          INPUT_SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
+          INPUT_HEADLESS: ${{ inputs.headless }}
+          INPUT_STOP_ON_BLOCK: ${{ inputs.stop_on_block }}
+        run: |
+          mkdir -p prepared/shards
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          source_files = sorted(Path("inputs/food-story-expansion-v1").glob("batch-*.txt"))
+          if len(source_files) != 17:
+              raise SystemExit(f"Expected 17 source batches, received {len(source_files)}")
+
+          targets = []
+          seen = set()
+          for source_file in source_files:
+              for raw_line in source_file.read_text(encoding="utf-8").splitlines():
+                  video_id = raw_line.strip()
+                  if not video_id:
+                      continue
+                  if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                      raise SystemExit(f"Invalid video ID: {video_id}")
+                  if video_id in seen:
+                      raise SystemExit(f"Duplicate video ID: {video_id}")
+                  seen.add(video_id)
+                  targets.append(video_id)
+
+          if len(targets) != 6768:
+              raise SystemExit(f"Expected 6,768 targets, received {len(targets)}")
+
+          shard_count = 20
+          shards = [[] for _ in range(shard_count)]
+          for index, video_id in enumerate(targets):
+              shards[index % shard_count].append(video_id)
+
+          for index, shard in enumerate(shards, start=1):
+              Path(f"prepared/shards/shard-{index:02d}.txt").write_text(
+                  "\n".join(shard) + "\n",
+                  encoding="utf-8",
+              )
+
+          all_targets_text = "\n".join(targets) + "\n"
+          Path("prepared/all_targets.txt").write_text(all_targets_text, encoding="utf-8")
+          matrix = {"shard": [f"{index:02d}" for index in range(1, shard_count + 1)]}
+          Path("prepared/matrix.json").write_text(json.dumps(matrix), encoding="utf-8")
+          manifest = {
+              "schema_version": 1,
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "git_revision": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "queue_id": "food-story-expansion-v1",
+              "target_count": len(targets),
+              "shard_count": shard_count,
+              "split_rule": "queue_order_modulo_shard_count",
+              "targets_sha256": hashlib.sha256(all_targets_text.encode()).hexdigest(),
+              "settings": {
+                  "language": os.environ["INPUT_LANGUAGE"],
+                  "timeout_ms": int(os.environ["INPUT_TIMEOUT_MS"]),
+                  "wait_ms": int(os.environ["INPUT_WAIT_MS"]),
+                  "sleep_seconds": float(os.environ["INPUT_SLEEP_SECONDS"]),
+                  "headless": os.environ["INPUT_HEADLESS"] == "true",
+                  "stop_on_block": os.environ["INPUT_STOP_ON_BLOCK"] == "true",
+                  "max_parallel": 20,
+              },
+          }
+          Path("prepared/run_manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
+              output.write(f"target_count={len(targets)}\n")
+              output.write(f"shard_count={shard_count}\n")
+          print(f"targets={len(targets)} shards={shard_count}")
+          PY
+
+      - name: Upload prepared transcript shards
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript-shard-prepared
+          path: prepared/*
+          if-no-files-found: error
+
+  probe-shards:
+    name: probe transcript shard ${{ matrix.shard }}
+    needs: prepare-shards
+    if: inputs.targets == 'food-story-expansion-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.prepare-shards.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project with Scrapling support
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[scrapling]"
+
+      - name: Install Chromium for Scrapling/Patchright
+        run: python -m patchright install --with-deps chromium
+
+      - name: Download prepared transcript shards
+        uses: actions/download-artifact@v4
+        with:
+          name: transcript-shard-prepared
+          path: prepared
+
+      - name: Fetch rendered DOM transcript shard
+        env:
+          SHARD: ${{ matrix.shard }}
+          SCRAPLING_PROXY_URL: ${{ secrets.SCRAPLING_PROXY_URL }}
+        run: |
+          mkdir -p shard-results
+          HEADLESS_FLAG="--headless"
+          if [ "${{ inputs.headless }}" != "true" ]; then
+            HEADLESS_FLAG="--headed"
+          fi
+          BLOCK_FLAG="--stop-on-block"
+          if [ "${{ inputs.stop_on_block }}" != "true" ]; then
+            BLOCK_FLAG="--keep-going"
+          fi
+          python -m yt_collector.cli scrapling-transcript-list \
+            --targets-file "prepared/shards/shard-${SHARD}.txt" \
+            --limit 0 \
+            --language "${{ inputs.language }}" \
+            --timeout-ms "${{ inputs.timeout_ms }}" \
+            --wait-ms "${{ inputs.wait_ms }}" \
+            --sleep-seconds "${{ inputs.sleep_seconds }}" \
+            $HEADLESS_FLAG \
+            $BLOCK_FLAG \
+            --out "shard-results/shard-${SHARD}.json"
+
+      - name: Validate shard result
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          shard = os.environ["SHARD"]
+          payload = json.loads(Path(f"shard-results/shard-{shard}.json").read_text(encoding="utf-8"))
+          summary = payload.get("transcript_collection") or {}
+          videos = payload.get("videos") or []
+          if summary.get("source") != "scrapling_rendered_dom_transcript":
+              raise SystemExit(f"Unexpected source for shard {shard}")
+          if summary.get("attempted") != len(videos):
+              raise SystemExit(f"Attempted/video mismatch for shard {shard}")
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload transcript shard result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript-shard-result-${{ matrix.shard }}
+          path: shard-results/shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+
+  finalize-shards:
+    name: merge transcript shard results
+    needs:
+      - prepare-shards
+      - probe-shards
+    if: ${{ always() && inputs.targets == 'food-story-expansion-v1' && needs.prepare-shards.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download prepared transcript state
+        uses: actions/download-artifact@v4
+        with:
+          name: transcript-shard-prepared
+          path: prepared
+
+      - name: Download transcript shard results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: transcript-shard-result-*
+          path: all-shard-results
+          merge-multiple: true
+
+      - name: Merge transcript shard results
+        run: |
+          mkdir -p merged
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          targets = [line.strip() for line in Path("prepared/all_targets.txt").read_text(encoding="utf-8").splitlines() if line.strip()]
+          target_set = set(targets)
+          result_files = sorted(Path("all-shard-results").glob("shard-*.json"))
+          videos_by_id = {}
+          shard_summaries = []
+          for result_file in result_files:
+              payload = json.loads(result_file.read_text(encoding="utf-8"))
+              summary = payload.get("transcript_collection") or {}
+              shard_summaries.append({"file": result_file.name, **summary})
+              for video in payload.get("videos") or []:
+                  video_id = video.get("video_id")
+                  if video_id not in target_set:
+                      raise SystemExit(f"Shard returned out-of-scope video: {video_id}")
+                  if video_id in videos_by_id:
+                      raise SystemExit(f"Duplicate shard result: {video_id}")
+                  videos_by_id[video_id] = video
+
+          ordered_videos = [videos_by_id[video_id] for video_id in targets if video_id in videos_by_id]
+          not_returned = [video_id for video_id in targets if video_id not in videos_by_id]
+          retry_targets = []
+          failure_counts = Counter()
+          found = 0
+          for video in ordered_videos:
+              transcript = video.get("transcript") or {}
+              if transcript.get("status") == "found":
+                  found += 1
+              else:
+                  retry_targets.append(video["video_id"])
+                  failure_counts[transcript.get("failure_class") or "unknown"] += 1
+          retry_targets.extend(not_returned)
+          failure_counts["shard_result_not_returned"] += len(not_returned)
+
+          merged = {
+              "transcript_collection": {
+                  "preferred_language": "${{ inputs.language }}",
+                  "requested_limit": 0,
+                  "requested": len(targets),
+                  "attempted": len(ordered_videos),
+                  "found": found,
+                  "missing": len(ordered_videos) - found,
+                  "not_returned": len(not_returned),
+                  "retry_count": len(retry_targets),
+                  "failure_counts": dict(sorted(failure_counts.items())),
+                  "source": "scrapling_rendered_dom_transcript",
+                  "shard_count_expected": 20,
+                  "shard_count_returned": len(result_files),
+                  "stopped_by_block_shards": sum(bool(summary.get("stopped_by_block")) for summary in shard_summaries),
+              },
+              "videos": ordered_videos,
+          }
+          summary = {
+              **merged["transcript_collection"],
+              "targets_sha256": json.loads(Path("prepared/run_manifest.json").read_text(encoding="utf-8"))["targets_sha256"],
+              "shards": shard_summaries,
+          }
+          Path("merged/video_list_scrapling_transcripts.json").write_text(
+              json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          Path("merged/merge_summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          Path("merged/retry_targets.txt").write_text(
+              ("\n".join(retry_targets) + "\n") if retry_targets else "",
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload merged transcript result
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-list-scrapling-transcripts-sharded
+          path: |
+            prepared/all_targets.txt
+            prepared/run_manifest.json
+            merged/video_list_scrapling_transcripts.json
+            merged/merge_summary.json
+            merged/retry_targets.txt
+          if-no-files-found: error
