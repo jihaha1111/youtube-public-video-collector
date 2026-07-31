@@ -176,6 +176,8 @@ GitHub Actions의 기존 `Video list Scrapling transcripts` 워크플로는 신�
 
 `food-story-current-not-collected-shorts-v1`은 사이트 최종 감사에서 발견된 쇼츠 추정 미요청 29편을 처음으로 DOM 조회합니다. 입력 순서대로 20편·9편의 2개 shard에서 실행하며 비쇼츠 `not_collected`는 포함하지 않습니다.
 
+`food-story-current-public-fallback-v1`은 기존 DOM 차단·패널 미발견 83편과 위 29편 실행에서 새로 확인된 비종결 실패 5편의 합집합 88편을 공개 자막 경로로 확인합니다. 4편 이하 22개 shard, 최대 병렬 20개로 실행하며 Chromium이나 DOM 수집은 반복하지 않습니다.
+
 마지막 job은 원래 입력 순서로 결과를 합치고 `merge_summary.json`과 `retry_targets.txt`를 포함한 `video-list-scrapling-transcripts-sharded` artifact를 만듭니다. 같은 준비 큐의 중복 실행은 workflow concurrency group으로 직렬화됩니다.
 
 렌더링 DOM에 세그먼트가 없지만 공개 caption API에는 자막이 있는지 한 영상만 확인할 때는 별도 원자료로 저장합니다. 기존 DOM 수집 artifact를 덮어쓰지 않습니다.
