@@ -248,13 +248,13 @@ jobs:
               source_files = sorted(Path("inputs/food-story-expansion-v1").glob("batch-*.txt"))
               if len(source_files) != 11:
                   raise SystemExit(f"Expected 11 source batches, received {len(source_files)}")
-              expected_target_count = 4138
+              expected_target_count = 4037
               shard_count = 20
               max_parallel = 20
               split_rule = "queue_order_modulo_shard_count"
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
-              expected_target_count = 45
+              expected_target_count = 40
               shard_size = 20
               max_parallel = 20
               split_rule = "contiguous_chunks_of_20"
