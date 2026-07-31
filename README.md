@@ -97,6 +97,19 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 이 명령은 `youtube-transcript-api`를 우선 사용하고, watch page의 공개 caption track 파싱을 fallback으로 둡니다. 공개 자막이 없거나 지역/연령/YouTube 응답 변경으로 막힌 영상은 `status: "missing"`과 error reason을 기록합니다. 자동 생성 자막은 인식 오류가 있을 수 있으므로 실제 프롬프트 seed로 쓰기 전 사람이 정리하는 것을 권장합니다.
 
+채널 collection 없이 고정 video ID·URL 목록을 같은 공개 자막 경로로 조회할 때는 다음 명령을 사용합니다. 입력 순서와 중복 제거 결과를 보존하고, IP 차단 시 잔여 항목을 명시적인 `skipped_after_ip_block`으로 남길 수 있습니다.
+
+```bash
+.venv/bin/python -m yt_collector.cli public-transcript-list \
+  --targets-file input_video_targets.txt \
+  --limit 0 \
+  --language ko \
+  --stop-on-ip-block \
+  --out output/public_target_transcripts.json
+```
+
+GitHub Actions의 `Video list public transcripts` 워크플로는 신규 11채널 DOM 잔여 24편을 OCR 없이 재확인합니다. 먼저 `food-story-new-11-public-fallback-smoke-v1` 2편을 각각 독립 shard로 확인하고, 전체 큐 `food-story-new-11-public-fallback-v1`은 4편 이하 6개 shard로 병렬 실행합니다. 결과는 원래 입력 순서로 병합하며 공개 자막 미확보 항목도 오류 코드와 함께 보존합니다.
+
 ## Scrapling/Patchright rendered DOM transcript
 
 `youtube-transcript-api`/`timedtext` fallback을 성공으로 보지 않고, YouTube 페이지를 브라우저 렌더링한 뒤 DOM transcript 패널에서 가져온 결과만 `source: "scrapling_rendered_dom_transcript"`로 기록합니다. Transcript 버튼/메뉴와 `transcript-segment-view-model` 또는 `ytd-transcript-segment-renderer` 세그먼트 DOM이 나타나는 조건을 기다리며, `--wait-ms`는 고정 대기가 아니라 초기 DOM settle 조건의 최대 대기값입니다.

@@ -4,6 +4,7 @@ from yt_collector.transcripts import (
     choose_caption_track,
     enrich_collection_with_transcripts,
     extract_caption_tracks,
+    fetch_public_transcript_list_file,
     parse_timedtext_xml,
 )
 
@@ -85,3 +86,57 @@ def test_enrich_collection_limit_zero_means_all_ranked_shorts() -> None:
     assert enriched["transcript_collection"]["requested_limit"] == 0
     assert enriched["transcript_collection"]["attempted"] == 3
     assert [item["video_id"] for item in enriched["videos"]] == ["high", "mid", "low"]
+
+
+def test_fetch_public_transcript_list_preserves_order_and_deduplicates(tmp_path) -> None:
+    targets = tmp_path / "targets.txt"
+    targets.write_text(
+        "Tb6DhFy9N_A\nhttps://www.youtube.com/shorts/onjVWrO2_5E\nTb6DhFy9N_A\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "result.json"
+
+    fetch_public_transcript_list_file(targets, output, fetcher=FakeFetcher())
+
+    import json
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "public-transcript-list-1"
+    assert payload["transcript_collection"]["attempted"] == 2
+    assert payload["transcript_collection"]["found"] == 2
+    assert [video["video_id"] for video in payload["videos"]] == [
+        "Tb6DhFy9N_A",
+        "onjVWrO2_5E",
+    ]
+
+
+class BlockingFetcher:
+    def fetch_video_transcript(self, video_id: str):
+        return {
+            "video_id": video_id,
+            "status": "missing",
+            "source": None,
+            "segments": [],
+            "text": "",
+            "errors": [{"code": "transcript_api_error", "message": "Too many requests"}],
+        }
+
+
+def test_fetch_public_transcript_list_can_stop_after_ip_block(tmp_path) -> None:
+    targets = tmp_path / "targets.txt"
+    targets.write_text("Tb6DhFy9N_A\nonjVWrO2_5E\n", encoding="utf-8")
+    output = tmp_path / "result.json"
+
+    fetch_public_transcript_list_file(
+        targets,
+        output,
+        fetcher=BlockingFetcher(),
+        stop_on_ip_block=True,
+    )
+
+    import json
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["transcript_collection"]["stopped_by_ip_block"] is True
+    assert payload["videos"][0]["transcript"]["errors"][0]["code"] == "transcript_api_error"
+    assert payload["videos"][1]["transcript"]["errors"][0]["code"] == "skipped_after_ip_block"

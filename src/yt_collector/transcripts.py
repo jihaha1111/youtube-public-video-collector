@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from .url_parser import VIDEO_ID_RE, extract_video_id
+
 
 @dataclass(frozen=True)
 class TranscriptSegment:
@@ -71,6 +73,7 @@ class PublicTranscriptFetcher:
             return {
                 "video_id": video_id,
                 "status": "found",
+                "source": "youtube_transcript_api",
                 "language_code": fetched.language_code,
                 "track_name": fetched.language,
                 "is_generated": fetched.is_generated,
@@ -99,6 +102,7 @@ class PublicTranscriptFetcher:
             return {
                 "video_id": video_id,
                 "status": "found",
+                "source": "watch_page_caption_track",
                 "language_code": track.language_code,
                 "track_name": track.name,
                 "is_generated": track.is_generated,
@@ -206,6 +210,75 @@ def enrich_collection_file(
     return output
 
 
+def fetch_public_transcript_list_file(
+    targets_path: str | Path,
+    out_path: str | Path,
+    *,
+    limit: int = 0,
+    preferred_language: str = "ko",
+    timeout: float = 20.0,
+    sleep_seconds: float = 0.0,
+    stop_on_ip_block: bool = False,
+    fetcher: PublicTranscriptFetcher | None = None,
+) -> Path:
+    """Fetch public caption tracks for an explicit, ordered target list."""
+    target_ids = _load_explicit_video_ids(targets_path)
+    if limit > 0:
+        target_ids = target_ids[:limit]
+    fetcher = fetcher or PublicTranscriptFetcher(
+        timeout=timeout,
+        preferred_language=preferred_language,
+    )
+    videos: list[dict[str, Any]] = []
+    stopped_by_ip_block = False
+    for index, video_id in enumerate(target_ids):
+        if stopped_by_ip_block:
+            transcript = _missing(
+                video_id,
+                "skipped_after_ip_block",
+                "Skipped because an earlier public transcript request in this run hit an IP-block response.",
+            )
+        else:
+            transcript = fetcher.fetch_video_transcript(video_id)
+            if stop_on_ip_block and _looks_like_ip_block(transcript):
+                stopped_by_ip_block = True
+        videos.append(
+            {
+                "video_id": video_id,
+                "canonical_watch_url": f"https://www.youtube.com/watch?v={video_id}",
+                "transcript": transcript,
+            }
+        )
+        if sleep_seconds > 0 and index < len(target_ids) - 1 and not stopped_by_ip_block:
+            time.sleep(sleep_seconds)
+
+    found_count = sum(
+        1 for video in videos if video["transcript"].get("status") == "found"
+    )
+    payload = {
+        "schema_version": "public-transcript-list-1",
+        "transcript_collection": {
+            "source": "youtube-transcript-api-with-watch-page-fallback",
+            "preferred_language": preferred_language,
+            "requested_limit": limit,
+            "attempted": len(videos),
+            "found": found_count,
+            "missing": len(videos) - found_count,
+            "stopped_by_ip_block": stopped_by_ip_block,
+            "timeout_seconds": timeout,
+            "sleep_seconds": sleep_seconds,
+        },
+        "videos": videos,
+    }
+    output = Path(out_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return output
+
+
 def extract_caption_tracks(html_text: str) -> list[CaptionTrack]:
     marker = '"captionTracks":'
     marker_index = html_text.find(marker)
@@ -305,6 +378,22 @@ def _load_existing_items(existing_path: str | Path) -> dict[str, dict[str, Any]]
     }
 
 
+def _load_explicit_video_ids(targets_path: str | Path) -> list[str]:
+    target_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_line in Path(targets_path).read_text(encoding="utf-8").splitlines():
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        video_id = value if VIDEO_ID_RE.fullmatch(value) else extract_video_id(value)
+        if video_id not in seen:
+            seen.add(video_id)
+            target_ids.append(video_id)
+    if not target_ids:
+        raise ValueError("targets file must contain at least one public YouTube URL or video ID")
+    return target_ids
+
+
 def _looks_like_ip_block(transcript: dict[str, Any]) -> bool:
     if transcript.get("status") == "found":
         return False
@@ -361,6 +450,7 @@ def _missing(video_id: str, code: str, message: str) -> dict[str, Any]:
     return {
         "video_id": video_id,
         "status": "missing",
+        "source": None,
         "language_code": None,
         "track_name": None,
         "is_generated": None,
