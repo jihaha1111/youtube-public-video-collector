@@ -40,10 +40,16 @@ on:
 
 jobs:
   collect-transcripts:
+    name: collect-transcripts-${{ matrix.batch }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        batch: ${{ fromJSON(inputs.targets == 'food-story-expansion-v1' && '["02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17"]' || '["direct"]') }}
 
     steps:
       - name: Check out repository
@@ -66,20 +72,27 @@ jobs:
       - name: Materialize explicit target list
         env:
           VIDEO_TARGETS: ${{ inputs.targets }}
+          EXECUTION_BATCH: ${{ matrix.batch }}
         run: |
           mkdir -p output
           python - <<'PY'
           import os
           from pathlib import Path
 
-          lines = [
-              line.strip()
-              for line in os.environ["VIDEO_TARGETS"].splitlines()
-              if line.strip() and not line.strip().startswith("#")
-          ]
+          execution_batch = os.environ["EXECUTION_BATCH"]
+          if execution_batch == "direct":
+              raw_lines = os.environ["VIDEO_TARGETS"].splitlines()
+          else:
+              source_path = Path(
+                  f"inputs/food-story-expansion-v1/batch-{execution_batch}.txt"
+              )
+              raw_lines = source_path.read_text(encoding="utf-8").splitlines()
+
+          lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
           if not lines:
               raise SystemExit("targets input must contain at least one URL or video ID")
           Path("output/video_targets.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"execution_batch={execution_batch}")
           print(f"targets={len(lines)}")
           PY
 
@@ -92,6 +105,7 @@ jobs:
           INPUT_SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
           INPUT_HEADLESS: ${{ inputs.headless }}
           INPUT_STOP_ON_BLOCK: ${{ inputs.stop_on_block }}
+          EXECUTION_BATCH: ${{ matrix.batch }}
         run: |
           python - <<'PY'
           import hashlib
@@ -107,6 +121,7 @@ jobs:
               "git_revision": os.environ["GITHUB_SHA"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "execution_batch": os.environ["EXECUTION_BATCH"],
               "targets_sha256": hashlib.sha256(target_bytes).hexdigest(),
               "settings": {
                   "limit": int(os.environ["INPUT_LIMIT"]),
@@ -214,7 +229,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-list-scrapling-transcripts
+          name: video-list-scrapling-transcripts-${{ matrix.batch }}
           path: |
             output/video_targets.txt
             output/run_manifest.json
