@@ -81,6 +81,8 @@ Real mode는 YouTube Data API v3의 `videos.list`, `channels.list`, `playlistIte
 
 `--limit 0`은 real API mode에서 업로드 플레이리스트를 페이지 끝까지 따라가며 public 후보 전체를 수집합니다. API quota를 쓰므로 먼저 작은 `--limit`로 샘플을 확인한 뒤 전체 실행에 사용하세요.
 
+GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력에 줄바꿈으로 여러 채널의 대표 watch/Shorts URL을 받을 수 있습니다. 여러 URL일 때는 내부에서 `--urls-file`로 일괄 수집하며 결과 JSON은 배열입니다. 대본 브라우저 작업 없이 메타데이터만 수집할 때는 `language` 입력을 `metadata-only`로 설정합니다. 단일 URL과 일반 언어 코드를 사용하는 기존 실행 방식은 그대로 유지됩니다.
+
 ## Public transcript enrichment
 
 `collect`로 만든 단일 collection JSON에서 조회수 상위 Shorts의 공개 자막/자동자막 transcript를 보강할 수 있습니다.
