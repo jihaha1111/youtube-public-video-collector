@@ -254,10 +254,10 @@ jobs:
               split_rule = "queue_order_modulo_shard_count"
           elif queue_id == "food-story-expansion-retry-v1":
               source_files = [Path("inputs/food-story-expansion-retry-v1/retry-targets.txt")]
-              expected_target_count = None
-              shard_size = 20
+              expected_target_count = 979
+              shard_count = 20
               max_parallel = 20
-              split_rule = "contiguous_chunks_of_20"
+              split_rule = "queue_order_modulo_shard_count"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
@@ -280,18 +280,9 @@ jobs:
           if expected_target_count is not None and len(targets) != expected_target_count:
               raise SystemExit(f"Expected {expected_target_count:,} targets, received {len(targets):,}")
 
-          if queue_id == "food-story-expansion-v1":
-              shards = [[] for _ in range(shard_count)]
-              for index, video_id in enumerate(targets):
-                  shards[index % shard_count].append(video_id)
-          else:
-              shards = [
-                  targets[index:index + shard_size]
-                  for index in range(0, len(targets), shard_size)
-              ]
-              shard_count = len(shards)
-              if len(shards) != shard_count:
-                  raise SystemExit("Retry shard count mismatch")
+          shards = [[] for _ in range(shard_count)]
+          for index, video_id in enumerate(targets):
+              shards[index % shard_count].append(video_id)
 
           shard_width = max(2, len(str(shard_count)))
           for index, shard in enumerate(shards, start=1):
@@ -492,8 +483,10 @@ jobs:
               if transcript.get("status") == "found":
                   found += 1
               else:
-                  retry_targets.append(video["video_id"])
-                  failure_counts[transcript.get("failure_class") or "unknown"] += 1
+                  failure_class = transcript.get("failure_class") or "unknown"
+                  failure_counts[failure_class] += 1
+                  if failure_class != "segments_empty":
+                      retry_targets.append(video["video_id"])
           retry_targets.extend(not_returned)
           failure_counts["shard_result_not_returned"] += len(not_returned)
 
