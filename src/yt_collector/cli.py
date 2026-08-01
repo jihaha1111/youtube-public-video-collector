@@ -12,6 +12,7 @@ from .exporters import export_csv, export_json
 from .mock_client import MockYouTubeClient
 from .youtube_client import YouTubeDataApiClient
 from .transcripts import enrich_collection_file, fetch_public_transcript_list_file
+from .shorts_path import audit_short_path_list_file
 from .scrapling_probe import (
     proxy_from_env,
     write_scrapling_collection_transcripts,
@@ -169,6 +170,35 @@ def public_transcript_list(
         stop_on_ip_block=stop_on_ip_block,
     )
     typer.echo(f"Wrote explicit-list public transcripts to {output_path}.")
+
+
+@app.command()
+def short_path_audit_list(
+    targets_file: Annotated[
+        Path,
+        typer.Option(
+            "--targets-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Text file with one public YouTube URL or 11-character video ID per line.",
+        ),
+    ],
+    limit: Annotated[int, typer.Option("--limit", min=0, help="Input-order limit; 0 means all unique targets.")] = 0,
+    out: Annotated[Path, typer.Option("--out", help="Output Shorts path audit JSON path.")] = Path("output/shorts_path_audit.json"),
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=1.0, help="Per-request HTTP timeout in seconds.")] = 20.0,
+    sleep_seconds: Annotated[float, typer.Option("--sleep-seconds", min=0.0, help="Delay between public Shorts path requests.")] = 0.0,
+) -> None:
+    """Classify public video IDs by the YouTube /shorts path response without following redirects."""
+    output_path = audit_short_path_list_file(
+        targets_file,
+        out,
+        limit=limit,
+        timeout=timeout_seconds,
+        sleep_seconds=sleep_seconds,
+    )
+    typer.echo(f"Wrote Shorts path audit to {output_path}.")
 
 @app.command()
 def scrapling_transcript(

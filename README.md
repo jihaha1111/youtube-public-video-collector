@@ -110,6 +110,18 @@ GitHub Actions의 `Channel Scrapling transcripts` 워크플로는 `url` 입력�
 
 GitHub Actions의 기존 `Video list Scrapling transcripts` 워크플로는 신규 11채널 DOM 잔여 24편을 공개 자막 fallback 모드로도 실행합니다. 먼저 `food-story-new-11-public-fallback-smoke-v1` 2편을 각각 독립 shard로 확인하고, 전체 큐 `food-story-new-11-public-fallback-v1`은 4편 이하 6개 shard로 병렬 실행합니다. fallback 큐에서는 Chromium을 설치하거나 DOM을 다시 조회하지 않으며 결과의 `source`를 `youtube-transcript-api-with-watch-page-fallback`으로 분리합니다. 결과는 원래 입력 순서로 병합하고 공개 자막 미확보 항목도 오류 코드와 함께 보존합니다.
 
+공개 영상이 실제 Shorts 경로로 열리는지 감사할 때는 리디렉션을 따라가지 않는 `HEAD /shorts/{video_id}` 응답을 기록합니다. `200`은 `shorts_path_accepted`, `/watch`로 향하는 `303`은 `redirected_to_watch_longform`이며 다른 응답은 삭제 판단에 사용하지 않고 재시도 대상으로 남깁니다.
+
+```bash
+.venv/bin/python -m yt_collector.cli short-path-audit-list \
+  --targets-file input_video_targets.txt \
+  --limit 0 \
+  --timeout-seconds 20 \
+  --out output/shorts_path_audit.json
+```
+
+GitHub Actions 큐 `food-story-short-path-audit-v1`은 333편을 20편 이하 17개 shard·최대 20개 병렬로 처리하고 입력 순서대로 병합합니다. 이 모드는 API key·Chromium·로그인 세션을 사용하지 않습니다.
+
 ## Scrapling/Patchright rendered DOM transcript
 
 `youtube-transcript-api`/`timedtext` fallback을 성공으로 보지 않고, YouTube 페이지를 브라우저 렌더링한 뒤 DOM transcript 패널에서 가져온 결과만 `source: "scrapling_rendered_dom_transcript"`로 기록합니다. Transcript 버튼/메뉴와 `transcript-segment-view-model` 또는 `ytd-transcript-segment-renderer` 세그먼트 DOM이 나타나는 조건을 기다리며, `--wait-ms`는 고정 대기가 아니라 초기 DOM settle 조건의 최대 대기값입니다.
@@ -248,6 +260,8 @@ YouTube Data API의 공개 응답만으로 Shorts 여부를 확정하지 않습�
 
 - 입력 URL path가 `/shorts/`이면 `true`
 - 또는 영상 길이가 60초 이하이면 `true`
+
+따라서 `false`는 비쇼츠 확정값이 아닙니다. 일반 채널에서 2024-10-15 이후 업로드된 정사각형·세로형 3분 이하 영상은 Shorts가 될 수 있으므로, 61~180초 항목은 위 Shorts path audit으로 재판정합니다. 정책 근거는 [YouTube Help의 3분 Shorts 안내](https://support.google.com/youtube/answer/15424877)입니다.
 
 ## 테스트
 
