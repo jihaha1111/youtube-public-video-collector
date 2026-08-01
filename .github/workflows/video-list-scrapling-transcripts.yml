@@ -447,6 +447,18 @@ jobs:
         if: ${{ !contains(inputs.targets, 'public-fallback') && !contains(inputs.targets, 'short-path-audit') }}
         run: python -m patchright install --with-deps chromium
 
+      - name: Validate Scrapling browser header generation
+        if: ${{ !contains(inputs.targets, 'public-fallback') && !contains(inputs.targets, 'short-path-audit') }}
+        run: |
+          python - <<'PY'
+          from scrapling.engines.toolbelt.fingerprints import generate_headers
+
+          user_agent = generate_headers(browser_mode=True).get("User-Agent")
+          if not user_agent:
+              raise SystemExit("Scrapling browser header generation returned no User-Agent")
+          print(user_agent)
+          PY
+
       - name: Download prepared transcript shards
         uses: actions/download-artifact@v4
         with:

@@ -21,6 +21,7 @@ dev = [
 ]
 scrapling = [
   "scrapling[fetchers]>=0.4.9,<1",
+  "apify-fingerprint-datapoints==0.13.0",
 ]
 
 [project.scripts]
