@@ -188,6 +188,8 @@ GitHub Actions 큐 `food-story-short-path-audit-v1`은 333편을 20편 이하 17
 
 `food-story-current-not-collected-shorts-v1`은 사이트 최종 감사에서 발견된 쇼츠 추정 미요청 29편을 처음으로 DOM 조회합니다. 입력 순서대로 20편·9편의 2개 shard에서 실행하며 비쇼츠 `not_collected`는 포함하지 않습니다.
 
+`food-story-confirmed-shorts-transcripts-v1`은 Shorts 경로 공개 응답 감사에서 새로 확정된 323편을 입력 순서대로 20편 이하 17개 shard·최대 20개 병렬로 DOM 조회합니다. 기존 대본 원장과 중복이 없고 실행 전 사이트 상태는 323편 모두 `not_collected`입니다.
+
 `food-story-current-public-fallback-v1`은 기존 DOM 차단·패널 미발견 83편과 위 29편 실행에서 새로 확인된 비종결 실패 5편의 합집합 88편을 공개 자막 경로로 확인합니다. 4편 이하 22개 shard, 최대 병렬 20개로 실행하며 Chromium이나 DOM 수집은 반복하지 않습니다.
 
 `food-story-known-source-missing-public-fallback-v1`은 DS Archive 원문부터 대본이 비어 있던 음식썰쇼핑 기준 1편을 공개 자막 경로에서 최종 확인하는 단일 대상 큐입니다.
