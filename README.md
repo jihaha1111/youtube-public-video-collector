@@ -198,6 +198,8 @@ GitHub Actions 큐 `food-story-short-path-audit-v1`은 333편을 20편 이하 17
 
 `food-story-refresh-short-path-audit-2026-08-02-v1`은 같은 갱신에서 새로 확인된 61~180초 영상 3편을 각각 독립 shard로 공개 Shorts 경로 감사합니다. `shorts_path_accepted`만 신규 대본 수집 대상으로 승격하고 `/watch` 리디렉션은 롱폼으로 분리합니다.
 
+`stationery-story-7-short-path-audit-v1`은 사용자가 수집 승인한 문구·신기템 썰쇼핑 7채널의 최초 전체 메타데이터 1,035편 가운데 61~180초 경계 영상 6편을 각각 독립 shard로 감사합니다. 이후 `stationery-story-7-transcripts-vN`, `stationery-story-7-retry-round-N-vN`, `stationery-story-7-public-fallback-vN` 큐는 같은 준비·병합 게이트를 사용하며 각각 20편·20편·4편 이하 shard로 실행합니다.
+
 Scrapling의 browser header 생성은 `apify-fingerprint-datapoints==0.13.0`으로 고정합니다. `0.14.0`은 Linux Chrome 148~149 조합을 만들지 못해 네트워크 요청 전 `extractor_error`가 발생하므로, 각 DOM shard는 Chromium 설치 뒤 User-Agent 생성 hard gate를 먼저 통과해야 합니다.
 
 `food-story-current-public-fallback-v1`은 기존 DOM 차단·패널 미발견 83편과 위 29편 실행에서 새로 확인된 비종결 실패 5편의 합집합 88편을 공개 자막 경로로 확인합니다. 4편 이하 22개 shard, 최대 병렬 20개로 실행하며 Chromium이나 DOM 수집은 반복하지 않습니다.
