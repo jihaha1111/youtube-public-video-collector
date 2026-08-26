@@ -387,9 +387,9 @@ jobs:
           elif re.fullmatch(r"stationery-story-\d+-public-fallback-v\d+", queue_id):
               source_files = [Path("inputs") / queue_id / "targets.txt"]
               expected_target_count = None
-              shard_size = 4
+              shard_size = 1
               max_parallel = 20
-              split_rule = "contiguous_chunks_of_4"
+              split_rule = "contiguous_chunks_of_1"
           else:
               raise SystemExit(f"Unsupported prepared queue: {queue_id}")
 
